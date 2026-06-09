@@ -1,0 +1,215 @@
+﻿# ================================
+# 通用站点配置模板（带注释）
+# 复制本文件，重命名为 sites/<你的站点ID>.yaml 后修改
+# ================================
+
+# 站点唯一ID（必填，CLI 里 run-site 用这个）
+id: your_site_id
+
+# 是否启用该站点
+enabled: true
+
+# 站点名称（仅用于日志展示）
+name: 你的站点名称
+
+# 列表入口（可多个）
+entry_urls:
+  - https://example.com/list
+
+schedule:
+  # 是否纳入 schedule 定时任务
+  enabled: true
+
+  # 定时二选一：
+  # 1) interval_seconds: 间隔执行（秒）
+  interval_seconds: 900
+
+  # 2) cron: crontab 表达式（示例：每天 08:30）
+  # cron: "30 8 * * *"
+
+  # 可选：调度抖动秒数，防止多个任务同一时刻并发
+  # jitter_seconds: 30
+
+limits:
+  # 站点级并发上限
+  max_concurrency: 4
+
+  # 请求间隔（秒），用于限速防封
+  request_interval_seconds: 0.2
+
+request:
+  # GET / POST
+  method: GET
+
+  # 请求头（可按站点补充 Referer / Accept / X-Requested-With 等）
+  headers:
+    Referer: https://example.com/list
+
+  # 固定 query 参数
+  params: {}
+
+  # POST 表单（method=POST 且非 JSON 时可用）
+  # data:
+  #   pageNo: 1
+
+  # POST JSON（method=POST 且 JSON 请求体时可用）
+  # json:
+  #   pageNo: 1
+
+  timeout_seconds: 30
+  retries: 2
+  retry_backoff_seconds: 0.8
+
+  # 是否校验证书
+  verify_ssl: true
+
+pagination:
+  # 可选：none / page_param / url_template
+  mode: none
+
+  # 起始页、结束页（包含 end_page）
+  start_page: 1
+  end_page: 20
+
+  # mode=page_param 时生效
+  # page_param: page
+
+  # mode=url_template 时生效
+  # 支持占位符：{base_url}、{page}
+  # url_template: "{base_url}?page={page}"
+
+cookie:
+  # 是否启用 cookie 注入（从 Redis Hash 读取）
+  enabled: false
+
+  # enabled=true 时建议配置
+  # redis_hash_key: spider:cookie:your_site_id
+  # redis_field: default
+  # header_name: Cookie
+
+dedup:
+  # 链接去重 hash key
+  redis_hash_key: zhaobiao:domian:linkqc
+
+  # 去重记录保留天数
+  ttl_days: 30
+
+  # 每次写入后触发清理的概率（降低清理开销）
+  prune_probability: 0.01
+
+list_extraction:
+  # 可选：如果列表响应是 JSON，且真正 HTML 在某个字段里，用这个先提取
+  # 例如：$.data.html
+  response_html_selectors: []
+  # response_html_selectors:
+  #   - kind: jsonpath
+  #     expr: $.data.html
+
+  # 列表项容器选择器（建议配置）
+  item_selectors:
+    - kind: xpath
+      expr: //ul/li
+
+  # 从每个 item 里提取详情链接
+  link_selectors:
+    - kind: xpath
+      expr: .//a/@href
+
+  # 从每个 item 里提取标题（按顺序尝试）
+  title_selectors:
+    - kind: xpath
+      expr: .//a/@title
+    - kind: xpath
+      expr: normalize-space(string(.//a))
+
+  # 从每个 item 里提取日期文本（可选）
+  date_selectors:
+    - kind: xpath
+      expr: .//span[contains(@class, "date")]/text()
+
+  # 标题最小长度，过短会被过滤
+  min_title_length: 6
+
+  # 规则失败时是否启用自动识别兜底
+  fallback_auto: true
+
+detail_extraction:
+  # 正文块选择器（按顺序命中）
+  content_selectors:
+    - kind: xpath
+      expr: //div[contains(@class, "article")]
+    - kind: xpath
+      expr: //div[@id="content"]
+
+  # 规则失败时自动识别正文
+  fallback_auto: true
+
+  # 自动识别失败后，用 readability 兜底
+  fallback_readability: true
+
+  # 正文最小文本长度（用于有效性判断）
+  min_content_length: 30
+
+attachments:
+  # 是否抽取并下载附件
+  enabled: true
+
+  # 附件链接提取规则（可混用 xpath/css/regex/jsonpath）
+  selectors:
+    - kind: xpath
+      expr: //a/@href
+    - kind: xpath
+      expr: //iframe/@src
+    - kind: xpath
+      expr: //embed/@src
+
+  # 附件后缀白名单
+  # [] 表示不过滤后缀，全部尝试下载
+  allowed_extensions:
+    - .pdf
+    - .doc
+    - .docx
+    - .xls
+    - .xlsx
+    - .zip
+    - .rar
+    - .txt
+
+  # 单附件最大字节数（50MB）
+  max_bytes: 52428800
+
+classification:
+  # 默认类型：zhaobiao / zhongbiao
+  default_type: zhaobiao
+
+  # 命中关键词则判为 zhongbiao
+  zhongbiao_keywords:
+    - 中标
+    - 成交
+    - 结果
+    - 合同
+    - 废标
+    - 终止
+
+area_extraction:
+  # 是否启用地区识别
+  enabled: true
+
+  # 固定地区（最高优先级）
+  # 只要配置了 fixed_value，就直接使用，不再走自动识别
+  fixed_value: ""
+
+  # 自动识别时：true=标题优先，false=正文优先
+  use_title_first: true
+
+output:
+  # 是否推送到 Redis 结果队列
+  enabled: true
+
+  # 招标 / 中标输出队列
+  queue_zhaobiao: zhaobiao:result:zhaobiao
+  queue_zhongbiao: zhaobiao:result:zhongbiao
+
+  # 附件下载目录（输出字段“附件”为绝对路径）
+  attachment_dir_zhaobiao: /root/pachong/zhaobiao/data/附件
+  attachment_dir_zhongbiao: /root/pachong/zhaobiao/data_zb/附件

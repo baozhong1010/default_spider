@@ -1,0 +1,119 @@
+﻿id: yangzhou_ggzy
+enabled: true
+name: 扬州市公共资源交易中心-交易信息
+entry_urls:
+  - https://ggzyjyzx.yangzhou.gov.cn/api-gateway/jpaas-publish-server/front/page/build/unit?parseType=bulidstatic&webId=zXDyJ8GG7uXLYycQySZV0&tplSetId=Z1qAjaqOW1RogGC2nYtmP&pageType=column&tagId=%E4%BF%A1%E6%81%AF%E5%88%97%E8%A1%A8&pageId=P0Uunf6svu853QgofLk3Q
+  - https://ggzyjyzx.yangzhou.gov.cn/api-gateway/jpaas-publish-server/front/page/build/unit?parseType=bulidstatic&webId=zXDyJ8GG7uXLYycQySZV0&tplSetId=Z1qAjaqOW1RogGC2nYtmP&pageType=column&tagId=%E4%BF%A1%E6%81%AF%E5%88%97%E8%A1%A8&pageId=EdxuDU4tPLWW6qWz1CgOq
+  - https://ggzyjyzx.yangzhou.gov.cn/api-gateway/jpaas-publish-server/front/page/build/unit?parseType=bulidstatic&webId=zXDyJ8GG7uXLYycQySZV0&tplSetId=Z1qAjaqOW1RogGC2nYtmP&pageType=column&tagId=%E4%BF%A1%E6%81%AF%E5%88%97%E8%A1%A8&pageId=P0IWooWBAvKtT5YdW0ac7
+  - https://ggzyjyzx.yangzhou.gov.cn/api-gateway/jpaas-publish-server/front/page/build/unit?parseType=bulidstatic&webId=zXDyJ8GG7uXLYycQySZV0&tplSetId=Z1qAjaqOW1RogGC2nYtmP&pageType=column&tagId=%E4%BF%A1%E6%81%AF%E5%88%97%E8%A1%A8&pageId=jEUmtotVUfLV5r01Bdcg4
+  - https://ggzyjyzx.yangzhou.gov.cn/api-gateway/jpaas-publish-server/front/page/build/unit?parseType=bulidstatic&webId=zXDyJ8GG7uXLYycQySZV0&tplSetId=Z1qAjaqOW1RogGC2nYtmP&pageType=column&tagId=%E4%BF%A1%E6%81%AF%E5%88%97%E8%A1%A8&pageId=u5bs18TjdtfD22cEbnSbG
+  - https://ggzyjyzx.yangzhou.gov.cn/api-gateway/jpaas-publish-server/front/page/build/unit?parseType=bulidstatic&webId=zXDyJ8GG7uXLYycQySZV0&tplSetId=Z1qAjaqOW1RogGC2nYtmP&pageType=column&tagId=%E4%BF%A1%E6%81%AF%E5%88%97%E8%A1%A8&pageId=vMfkTcHUFgg4jOS3h5t1G
+  - https://ggzyjyzx.yangzhou.gov.cn/api-gateway/jpaas-publish-server/front/page/build/unit?parseType=bulidstatic&webId=zXDyJ8GG7uXLYycQySZV0&tplSetId=Z1qAjaqOW1RogGC2nYtmP&pageType=column&tagId=%E4%BF%A1%E6%81%AF%E5%88%97%E8%A1%A8&pageId=GV8fmA89x1MeN3tjdiaeU
+  - https://ggzyjyzx.yangzhou.gov.cn/api-gateway/jpaas-publish-server/front/page/build/unit?parseType=bulidstatic&webId=zXDyJ8GG7uXLYycQySZV0&tplSetId=Z1qAjaqOW1RogGC2nYtmP&pageType=column&tagId=%E4%BF%A1%E6%81%AF%E5%88%97%E8%A1%A8&pageId=eECfeX5rxNoeqZuYP8EZN
+  - https://ggzyjyzx.yangzhou.gov.cn/api-gateway/jpaas-publish-server/front/page/build/unit?parseType=bulidstatic&webId=zXDyJ8GG7uXLYycQySZV0&tplSetId=Z1qAjaqOW1RogGC2nYtmP&pageType=column&tagId=%E4%BF%A1%E6%81%AF%E5%88%97%E8%A1%A8&pageId=1QUoN7QL8J4D3mF1rjEUS
+  - https://ggzyjyzx.yangzhou.gov.cn/api-gateway/jpaas-publish-server/front/page/build/unit?parseType=bulidstatic&webId=zXDyJ8GG7uXLYycQySZV0&tplSetId=Z1qAjaqOW1RogGC2nYtmP&pageType=column&tagId=%E4%BF%A1%E6%81%AF%E5%88%97%E8%A1%A8&pageId=ti0Nlz6YPT2i7gRIQRE5P
+  - https://ggzyjyzx.yangzhou.gov.cn/api-gateway/jpaas-publish-server/front/page/build/unit?parseType=bulidstatic&webId=zXDyJ8GG7uXLYycQySZV0&tplSetId=Z1qAjaqOW1RogGC2nYtmP&pageType=column&tagId=%E4%BF%A1%E6%81%AF%E5%88%97%E8%A1%A8&pageId=PGssRJb3rTQXDdMYV37k5
+  - https://ggzyjyzx.yangzhou.gov.cn/api-gateway/jpaas-publish-server/front/page/build/unit?parseType=bulidstatic&webId=zXDyJ8GG7uXLYycQySZV0&tplSetId=Z1qAjaqOW1RogGC2nYtmP&pageType=column&tagId=%E4%BF%A1%E6%81%AF%E5%88%97%E8%A1%A8&pageId=tRQZI7wrPCTkJKFHzhpLy
+  - https://ggzyjyzx.yangzhou.gov.cn/api-gateway/jpaas-publish-server/front/page/build/unit?parseType=bulidstatic&webId=zXDyJ8GG7uXLYycQySZV0&tplSetId=Z1qAjaqOW1RogGC2nYtmP&pageType=column&tagId=%E4%BF%A1%E6%81%AF%E5%88%97%E8%A1%A8&pageId=kaKU6vRC10AI4swJUquUG
+  - https://ggzyjyzx.yangzhou.gov.cn/api-gateway/jpaas-publish-server/front/page/build/unit?parseType=bulidstatic&webId=zXDyJ8GG7uXLYycQySZV0&tplSetId=Z1qAjaqOW1RogGC2nYtmP&pageType=column&tagId=%E4%BF%A1%E6%81%AF%E5%88%97%E8%A1%A8&pageId=gZkJjXv9vnLYm8f83vLwm
+  - https://ggzyjyzx.yangzhou.gov.cn/api-gateway/jpaas-publish-server/front/page/build/unit?parseType=bulidstatic&webId=zXDyJ8GG7uXLYycQySZV0&tplSetId=Z1qAjaqOW1RogGC2nYtmP&pageType=column&tagId=%E4%BF%A1%E6%81%AF%E5%88%97%E8%A1%A8&pageId=pTmMloAzDaYSy0J8W2aJC
+  - https://ggzyjyzx.yangzhou.gov.cn/api-gateway/jpaas-publish-server/front/page/build/unit?parseType=bulidstatic&webId=zXDyJ8GG7uXLYycQySZV0&tplSetId=Z1qAjaqOW1RogGC2nYtmP&pageType=column&tagId=%E4%BF%A1%E6%81%AF%E5%88%97%E8%A1%A8&pageId=n3tUwI5pVZNUAvsWNPQ60
+  - https://ggzyjyzx.yangzhou.gov.cn/api-gateway/jpaas-publish-server/front/page/build/unit?parseType=bulidstatic&webId=zXDyJ8GG7uXLYycQySZV0&tplSetId=Z1qAjaqOW1RogGC2nYtmP&pageType=column&tagId=%E4%BF%A1%E6%81%AF%E5%88%97%E8%A1%A8&pageId=fNW8PdLZ4zGs3gcKLMouB
+  - https://ggzyjyzx.yangzhou.gov.cn/api-gateway/jpaas-publish-server/front/page/build/unit?parseType=bulidstatic&webId=zXDyJ8GG7uXLYycQySZV0&tplSetId=Z1qAjaqOW1RogGC2nYtmP&pageType=column&tagId=%E4%BF%A1%E6%81%AF%E5%88%97%E8%A1%A8&pageId=JZix0DknVeft3LCTrEgzD
+  - https://ggzyjyzx.yangzhou.gov.cn/api-gateway/jpaas-publish-server/front/page/build/unit?parseType=bulidstatic&webId=zXDyJ8GG7uXLYycQySZV0&tplSetId=Z1qAjaqOW1RogGC2nYtmP&pageType=column&tagId=%E4%BF%A1%E6%81%AF%E5%88%97%E8%A1%A8&pageId=c1khTLU9ssV5ZEOz47RZ4
+  - https://ggzyjyzx.yangzhou.gov.cn/api-gateway/jpaas-publish-server/front/page/build/unit?parseType=bulidstatic&webId=zXDyJ8GG7uXLYycQySZV0&tplSetId=Z1qAjaqOW1RogGC2nYtmP&pageType=column&tagId=%E4%BF%A1%E6%81%AF%E5%88%97%E8%A1%A8&pageId=O7X4wjKTykoqgP7vDqCss
+  - https://ggzyjyzx.yangzhou.gov.cn/api-gateway/jpaas-publish-server/front/page/build/unit?parseType=bulidstatic&webId=zXDyJ8GG7uXLYycQySZV0&tplSetId=Z1qAjaqOW1RogGC2nYtmP&pageType=column&tagId=%E4%BF%A1%E6%81%AF%E5%88%97%E8%A1%A8&pageId=cQRfkHOBXsfoMOm50DqxE
+  - https://ggzyjyzx.yangzhou.gov.cn/api-gateway/jpaas-publish-server/front/page/build/unit?parseType=bulidstatic&webId=zXDyJ8GG7uXLYycQySZV0&tplSetId=Z1qAjaqOW1RogGC2nYtmP&pageType=column&tagId=%E4%BF%A1%E6%81%AF%E5%88%97%E8%A1%A8&pageId=asDNRzVochfKkUepotZed
+  - https://ggzyjyzx.yangzhou.gov.cn/api-gateway/jpaas-publish-server/front/page/build/unit?parseType=bulidstatic&webId=zXDyJ8GG7uXLYycQySZV0&tplSetId=Z1qAjaqOW1RogGC2nYtmP&pageType=column&tagId=%E4%BF%A1%E6%81%AF%E5%88%97%E8%A1%A8&pageId=rjfSOI9RGBnYBoQpZT2f1
+  - https://ggzyjyzx.yangzhou.gov.cn/api-gateway/jpaas-publish-server/front/page/build/unit?parseType=bulidstatic&webId=zXDyJ8GG7uXLYycQySZV0&tplSetId=Z1qAjaqOW1RogGC2nYtmP&pageType=column&tagId=%E4%BF%A1%E6%81%AF%E5%88%97%E8%A1%A8&pageId=Bg1UzuYPqSro4BywIkzWz
+
+schedule:
+  enabled: true
+  interval_seconds: 3600
+
+limits:
+  max_concurrency: 4
+  request_interval_seconds: 0.2
+
+request:
+  method: GET
+  headers:
+    Referer: https://ggzyjyzx.yangzhou.gov.cn/jyxx/index.html
+    Accept: application/json, text/javascript, */*; q=0.01
+    X-Requested-With: XMLHttpRequest
+  params: {}
+  timeout_seconds: 30
+  retries: 2
+  retry_backoff_seconds: 0.8
+  verify_ssl: true
+
+pagination:
+  mode: url_template
+  start_page: 1
+  end_page: 20
+  url_template: "{base_url}&paramJson=%7B%22pageNo%22%3A{page}%2C%22pageSize%22%3A%2215%22%7D"
+
+cookie:
+  enabled: false
+
+dedup:
+  redis_hash_key: zhaobiao:domian:linkqc
+  ttl_days: 30
+  prune_probability: 0.01
+
+list_extraction:
+  response_html_selectors:
+    - kind: jsonpath
+      expr: $.data.html
+  item_selectors:
+    - kind: xpath
+      expr: //ul//li[contains(@class, "clearfix")]
+  link_selectors:
+    - kind: xpath
+      expr: .//a/@href
+  title_selectors:
+    - kind: xpath
+      expr: .//a/@title
+    - kind: xpath
+      expr: normalize-space(string(.//a))
+  date_selectors:
+    - kind: xpath
+      expr: .//span[contains(@class, "time")]/text()
+  min_title_length: 6
+  fallback_auto: false
+
+detail_extraction:
+  content_selectors:
+    - kind: xpath
+      expr: //div[contains(@class, "bt-content")]
+    - kind: xpath
+      expr: //div[contains(@class, "Article")]
+  fallback_auto: true
+  fallback_readability: true
+  min_content_length: 30
+
+attachments:
+  enabled: true
+  selectors:
+    - kind: regex
+      expr: '"downloadUrl"\s*:\s*"(.*?)"'
+    - kind: xpath
+      expr: //div[contains(@class, "article-appendix")]//a/@href
+  allowed_extensions: []
+  max_bytes: 52428800
+
+classification:
+  default_type: zhaobiao
+  zhongbiao_keywords: [中标, 成交, 评标结果, 结果公示, 中标候选]
+
+area_extraction:
+  enabled: true
+  fixed_value: 扬州市
+  use_title_first: true
+
+output:
+  enabled: true
+  queue_zhaobiao: zhaobiao:result:zhaobiao
+  queue_zhongbiao: zhaobiao:result:zhongbiao
+  attachment_dir_zhaobiao: /root/pachong/zhaobiao/data/附件
+  attachment_dir_zhongbiao: /root/pachong/zhaobiao/data_zb/附件
