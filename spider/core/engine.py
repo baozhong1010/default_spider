@@ -13,6 +13,7 @@ from spider.core.state import CircuitState, SiteRateLimiter
 from spider.extract.attachment_downloader import AttachmentDownloader
 from spider.extract.detail_extractor import DetailExtractor
 from spider.extract.list_extractor import ListExtractor, ListItem
+from spider.extract.pdf_content import PdfBodyConverter, PdfBodyDetector
 from spider.fetch.cookie_provider import RedisCookieProvider
 from spider.fetch.http_client import FetchRequest, HttpFetcher
 from spider.fetch.redis_client import create_redis_client
@@ -101,6 +102,8 @@ class SpiderEngine(object):
         cookie = await self.cookie_provider.get_cookie(site.cookie)
         list_extractor = ListExtractor(site.list_extraction)
         detail_extractor = DetailExtractor(site.detail_extraction, site.attachments)
+        pdf_detector = PdfBodyDetector()
+        pdf_converter = PdfBodyConverter()
         deduper = RedisDeduper(self.redis, site.dedup)
         attachment_downloader = AttachmentDownloader(self.fetcher)
         limiter = SiteRateLimiter(site.limits.request_interval_seconds)
@@ -108,10 +111,30 @@ class SpiderEngine(object):
         entry_urls = override_entry_urls or site.entry_urls
         request_tasks = build_list_request_tasks(entry_urls, site.request, site.pagination)
 
-        list_items = []  # type: List[ListItem]
+        # ???????????????? worker ???????????????????
+        detail_queue = asyncio.Queue()
+        # ??????????????????????????????
+        queued_detail_urls = set()
+        queued_detail_urls_lock = asyncio.Lock()
+
+        async def enqueue_detail_item(item):
+            # type: (ListItem) -> None
+            async with queued_detail_urls_lock:
+                if item.url in queued_detail_urls:
+                    return
+                queued_detail_urls.add(item.url)
+            await detail_queue.put(item)
 
         async def fetch_list(task):
             metrics.list_requests += 1
+            log_event(
+                self.logger,
+                logging.INFO,
+                "list.page.fetch.start",
+                site_id=site.id,
+                list_url=task.url,
+                method=task.method,
+            )
             await limiter.wait_turn()
             req = FetchRequest(
                 url=task.url,
@@ -130,34 +153,63 @@ class SpiderEngine(object):
             except Exception as exc:
                 metrics.list_request_failed += 1
                 metrics.fail("list_fetch_exception")
+                log_event(
+                    self.logger,
+                    logging.WARNING,
+                    "list.page.fetch.failed",
+                    site_id=site.id,
+                    list_url=task.url,
+                    reason="list_fetch_exception",
+                    error=str(exc),
+                )
                 await self._record_failure(site, "list", task.url, str(exc), None)
                 return
 
             if resp.status_code != 200:
                 metrics.list_request_failed += 1
                 metrics.fail("list_status_%s" % resp.status_code)
+                log_event(
+                    self.logger,
+                    logging.WARNING,
+                    "list.page.fetch.failed",
+                    site_id=site.id,
+                    list_url=task.url,
+                    reason="list_status_%s" % resp.status_code,
+                    status_code=resp.status_code,
+                )
                 await self._record_failure(site, "list", task.url, "status=%s" % resp.status_code, resp.text)
                 return
+
+            log_event(
+                self.logger,
+                logging.INFO,
+                "list.page.fetch.done",
+                site_id=site.id,
+                list_url=task.url,
+                status_code=resp.status_code,
+                response_url=resp.url,
+            )
 
             extracted = list_extractor.extract(resp.text, resp.url)
             for extracted_item in extracted:
                 extracted_item.source_url = resp.url
             metrics.list_items += len(extracted)
-            list_items.extend(extracted)
+            log_event(
+                self.logger,
+                logging.INFO,
+                "list.page.parse.done",
+                site_id=site.id,
+                list_url=resp.url,
+                item_count=len(extracted),
+            )
+            for extracted_item in extracted:
+                await enqueue_detail_item(extracted_item)
 
         list_sem = asyncio.Semaphore(site.limits.max_concurrency)
 
         async def list_worker(task):
             async with list_sem:
                 await fetch_list(task)
-
-        await asyncio.gather(*(list_worker(task) for task in request_tasks))
-
-        unique_items = {}  # type: Dict[str, ListItem]
-        for item in list_items:
-            unique_items[item.url] = item
-
-        detail_sem = asyncio.Semaphore(site.limits.max_concurrency)
 
         async def process_detail(item):
             # type: (ListItem) -> None
@@ -192,6 +244,15 @@ class SpiderEngine(object):
                 return
 
             metrics.detail_requests += 1
+            log_event(
+                self.logger,
+                logging.INFO,
+                "detail.fetch.start",
+                trace_id=trace_id,
+                site_id=site.id,
+                detail_url=item.url,
+                title=item.title,
+            )
             await limiter.wait_turn()
 
             req = FetchRequest(
@@ -209,6 +270,16 @@ class SpiderEngine(object):
             except Exception as exc:
                 metrics.detail_request_failed += 1
                 metrics.fail("detail_fetch_exception")
+                log_event(
+                    self.logger,
+                    logging.WARNING,
+                    "detail.fetch.failed",
+                    trace_id=trace_id,
+                    site_id=site.id,
+                    detail_url=item.url,
+                    reason="detail_fetch_exception",
+                    error=str(exc),
+                )
                 await self._record_failure(site, "detail", item.url, str(exc), None, trace_id=trace_id)
                 log_event(
                     self.logger,
@@ -227,6 +298,16 @@ class SpiderEngine(object):
             if resp.status_code != 200:
                 metrics.detail_request_failed += 1
                 metrics.fail("detail_status_%s" % resp.status_code)
+                log_event(
+                    self.logger,
+                    logging.WARNING,
+                    "detail.fetch.failed",
+                    trace_id=trace_id,
+                    site_id=site.id,
+                    detail_url=item.url,
+                    reason="detail_status_%s" % resp.status_code,
+                    status_code=resp.status_code,
+                )
                 await self._record_failure(site, "detail", item.url, "status=%s" % resp.status_code, resp.text, trace_id=trace_id)
                 log_event(
                     self.logger,
@@ -241,13 +322,136 @@ class SpiderEngine(object):
                 )
                 return
 
-            parsed = detail_extractor.extract(resp.text, resp.url)
-            content_html = parsed.content
+            log_event(
+                self.logger,
+                logging.INFO,
+                "detail.fetch.done",
+                trace_id=trace_id,
+                site_id=site.id,
+                detail_url=item.url,
+                status_code=resp.status_code,
+                content_type=resp.headers.get("Content-Type", ""),
+            )
+            log_event(
+                self.logger,
+                logging.INFO,
+                "detail.parse.start",
+                trace_id=trace_id,
+                site_id=site.id,
+                detail_url=item.url,
+                content_type=resp.headers.get("Content-Type", ""),
+            )
+
+            pdf_detection = pdf_detector.detect(resp.url, headers=resp.headers, html_text=resp.text)
+            attachment_urls = []
+            pdf_content_used = False
+
+            if pdf_detection.is_pdf_body and pdf_detection.pdf_url == resp.url:
+                try:
+                    content_html = pdf_converter.convert(resp.content, title=item.title)
+                    pdf_content_used = True
+                except Exception as exc:
+                    metrics.extract_failed += 1
+                    metrics.fail("pdf_parse_failed")
+                    await self._record_failure(site, "extract", item.url, "pdf_parse_failed", None, trace_id=trace_id)
+                    log_event(
+                        self.logger,
+                        logging.INFO,
+                        "record.trace.completed",
+                        trace_id=trace_id,
+                        site_id=site.id,
+                        detail_url=item.url,
+                        push_target="redis",
+                        push_success=False,
+                        reason="pdf_parse_failed",
+                        error=str(exc),
+                    )
+                    return
+            else:
+                parsed = detail_extractor.extract(resp.text, resp.url)
+                content_html = parsed.content
+                attachment_urls = list(parsed.attachment_urls)
+                content_text = detail_extractor.to_plain_text(content_html)
+
+                if len(content_text) < site.detail_extraction.min_content_length and pdf_detection.is_pdf_body and pdf_detection.pdf_url:
+                    pdf_req = FetchRequest(
+                        url=pdf_detection.pdf_url,
+                        method="GET",
+                        headers=dict({"Referer": item.url}, **site.request.headers),
+                        timeout_seconds=site.request.timeout_seconds,
+                        retries=site.request.retries,
+                        retry_backoff_seconds=site.request.retry_backoff_seconds,
+                        verify_ssl=site.request.verify_ssl,
+                    )
+                    try:
+                        pdf_resp = await self.fetcher.fetch(pdf_req, cookie=cookie)
+                    except Exception as exc:
+                        metrics.extract_failed += 1
+                        metrics.fail("pdf_download_failed")
+                        await self._record_failure(site, "extract", item.url, "pdf_download_failed", resp.text, trace_id=trace_id)
+                        log_event(
+                            self.logger,
+                            logging.INFO,
+                            "record.trace.completed",
+                            trace_id=trace_id,
+                            site_id=site.id,
+                            detail_url=item.url,
+                            push_target="redis",
+                            push_success=False,
+                            reason="pdf_download_failed",
+                            error=str(exc),
+                        )
+                        return
+
+                    if pdf_resp.status_code != 200:
+                        metrics.extract_failed += 1
+                        metrics.fail("pdf_download_failed")
+                        await self._record_failure(site, "extract", item.url, "pdf_download_failed", resp.text, trace_id=trace_id)
+                        log_event(
+                            self.logger,
+                            logging.INFO,
+                            "record.trace.completed",
+                            trace_id=trace_id,
+                            site_id=site.id,
+                            detail_url=item.url,
+                            push_target="redis",
+                            push_success=False,
+                            reason="pdf_download_failed",
+                            status_code=pdf_resp.status_code,
+                        )
+                        return
+
+                    try:
+                        content_html = pdf_converter.convert(pdf_resp.content, title=item.title)
+                        pdf_content_used = True
+                    except Exception as exc:
+                        metrics.extract_failed += 1
+                        metrics.fail("pdf_parse_failed")
+                        await self._record_failure(site, "extract", item.url, "pdf_parse_failed", resp.text, trace_id=trace_id)
+                        log_event(
+                            self.logger,
+                            logging.INFO,
+                            "record.trace.completed",
+                            trace_id=trace_id,
+                            site_id=site.id,
+                            detail_url=item.url,
+                            push_target="redis",
+                            push_success=False,
+                            reason="pdf_parse_failed",
+                            error=str(exc),
+                        )
+                        return
+
+                    attachment_urls = [
+                        url for url in attachment_urls if url not in set(pdf_detection.matched_urls + [pdf_detection.pdf_url])
+                    ]
+
             content_text = detail_extractor.to_plain_text(content_html)
-            if len(content_text) < site.detail_extraction.min_content_length:
+            content_source = "pdf" if pdf_content_used else "html"
+            if pdf_content_used and pdf_converter.is_text_corrupted(content_text):
                 metrics.extract_failed += 1
-                metrics.fail("detail_content_too_short")
-                await self._record_failure(site, "extract", item.url, "content_too_short", resp.text, trace_id=trace_id)
+                metrics.fail("pdf_text_corrupted")
+                await self._record_failure(site, "extract", item.url, "pdf_text_corrupted", resp.text, trace_id=trace_id)
                 log_event(
                     self.logger,
                     logging.INFO,
@@ -257,16 +461,46 @@ class SpiderEngine(object):
                     detail_url=item.url,
                     push_target="redis",
                     push_success=False,
-                    reason="content_too_short",
+                    reason="pdf_text_corrupted",
                 )
                 return
+
+            if len(content_text) < site.detail_extraction.min_content_length:
+                reason = "pdf_content_too_short" if pdf_detection.is_pdf_body else "content_too_short"
+                metrics.extract_failed += 1
+                metrics.fail(reason)
+                await self._record_failure(site, "extract", item.url, reason, resp.text, trace_id=trace_id)
+                log_event(
+                    self.logger,
+                    logging.INFO,
+                    "record.trace.completed",
+                    trace_id=trace_id,
+                    site_id=site.id,
+                    detail_url=item.url,
+                    push_target="redis",
+                    push_success=False,
+                    reason=reason,
+                )
+                return
+
+            log_event(
+                self.logger,
+                logging.INFO,
+                "detail.parse.done",
+                trace_id=trace_id,
+                site_id=site.id,
+                detail_url=item.url,
+                content_source=content_source,
+                content_length=len(content_text),
+                attachment_count=len(attachment_urls),
+            )
 
             bid_type = classify_bid_type(item.title, content_text, site.classification)
             area = detect_area(item.title, content_text, site.area_extraction)
             publish_date = normalize_date_yyyy_mm_dd(item.date, default_date=dt.date.today())
 
             attachment_files = await attachment_downloader.download_many(
-                attachment_urls=parsed.attachment_urls,
+                attachment_urls=attachment_urls,
                 request_cfg=site.request,
                 output_cfg=site.output,
                 bid_type=bid_type,
@@ -366,12 +600,25 @@ class SpiderEngine(object):
                         reason="output_disabled",
                     )
 
-        async def detail_worker(item):
-            # type: (ListItem) -> None
-            async with detail_sem:
-                await process_detail(item)
+        async def detail_worker():
+            # type: () -> None
+            while True:
+                item = await detail_queue.get()
+                try:
+                    # ? None ???????????????? worker ??????
+                    if item is None:
+                        return
+                    await process_detail(item)
+                finally:
+                    detail_queue.task_done()
 
-        await asyncio.gather(*(detail_worker(item) for item in unique_items.values()))
+        detail_workers = [asyncio.create_task(detail_worker()) for _ in range(site.limits.max_concurrency)]
+
+        await asyncio.gather(*(list_worker(task) for task in request_tasks))
+        for _ in range(site.limits.max_concurrency):
+            await detail_queue.put(None)
+        await detail_queue.join()
+        await asyncio.gather(*detail_workers)
         success = metrics.published > 0 or (metrics.list_items > 0 and metrics.detail_requests > 0)
         self._update_circuit(site.id, success)
         self._log_metrics(metrics)
@@ -418,7 +665,7 @@ class SpiderEngine(object):
 
         sample_file = None  # type: Optional[Path]
         if html_text:
-            sample_file = sample_dir / "%s_%s_%s.html" % (site.id, phase, failure_id)
+            sample_file = sample_dir / ("%s_%s_%s.html" % (site.id, phase, failure_id))
             sample_file.write_text(html_text, encoding="utf-8", errors="ignore")
 
         payload = {

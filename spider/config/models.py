@@ -123,6 +123,7 @@ class ListExtractionConfig(BaseModel):
     link_selectors: List[Selector] = Field(default_factory=list)
     title_selectors: List[Selector] = Field(default_factory=list)
     date_selectors: List[Selector] = Field(default_factory=list)
+    detail_url_template: Optional[str] = None
     min_title_length: int = 8
     fallback_auto: bool = True
 

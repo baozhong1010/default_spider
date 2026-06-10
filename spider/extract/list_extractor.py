@@ -1,6 +1,6 @@
 ﻿import re
 from dataclasses import dataclass
-from typing import Dict, List
+from typing import Any, Dict, List
 
 from lxml import etree
 
@@ -54,11 +54,11 @@ class ListExtractor(object):
 
     def _extract_by_rules(self, tree, html_text, base_url):
         # type: (etree._Element, str, str) -> List[ListItem]
-        item_nodes = []  # type: List[etree._Element]
+        item_nodes = []  # type: List[Any]
         if self.cfg.item_selectors:
             for selector in self.cfg.item_selectors:
                 nodes = apply_selector(selector=selector, context=tree, html_text=html_text, as_nodes=True)
-                item_nodes.extend([n for n in nodes if isinstance(n, etree._Element)])
+                item_nodes.extend([n for n in nodes if isinstance(n, (etree._Element, dict, list))])
         else:
             item_nodes = tree.xpath("//a/..")
 
@@ -77,18 +77,36 @@ class ListExtractor(object):
             title = first_non_empty(title_values)
             link = first_non_empty(link_values)
             date = first_non_empty(date_values)
-            if not title and link:
+            if not title and link and isinstance(node, etree._Element):
                 title = first_non_empty(node.xpath(".//a/@title") + node.xpath(".//a//text()"))
-            if not link:
+            if not link and isinstance(node, etree._Element):
                 link = first_non_empty(node.xpath(".//a/@href"))
 
             title = normalize_space(title)
+            link = normalize_space(link)
+            if self.cfg.detail_url_template and link:
+                link = self._format_detail_url(node, link)
             if len(title) < self.cfg.min_title_length or not link:
                 continue
             if link.lower().startswith("javascript"):
                 continue
             result.append(ListItem(title=title, url=resolve_url(base_url, link), date=normalize_space(date), source_url=""))
         return result
+
+    def _format_detail_url(self, node, value):
+        # type: (Any, str) -> str
+        if not self.cfg.detail_url_template:
+            return value
+
+        fields = {}  # type: Dict[str, Any]
+        if isinstance(node, dict):
+            fields.update(node)
+        fields.setdefault("value", value)
+        fields.setdefault("fdId", value)
+        try:
+            return self.cfg.detail_url_template.format(**fields)
+        except Exception:
+            return value
 
     def _extract_by_auto(self, tree, base_url):
         # type: (etree._Element, str) -> List[ListItem]

@@ -50,7 +50,7 @@ request:
 pagination:
   mode: url_template
   start_page: 1
-  end_page: 20
+  end_page: 5
   url_template: "{base_url}&paramJson=%7B%22pageNo%22%3A{page}%2C%22pageSize%22%3A%2215%22%7D"
 
 cookie:

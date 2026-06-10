@@ -29,18 +29,37 @@ def _to_text(value):
     return normalize_space(str(value))
 
 
+def _json_payload(context, html_text):
+    # type: (Any, Any) -> Optional[Any]
+    if context is not None and not isinstance(context, etree._Element):
+        return context
+    if isinstance(html_text, (dict, list)):
+        return html_text
+    try:
+        return json.loads(html_text)
+    except Exception:
+        return None
+
+
 def apply_selector(selector, context, html_text, as_nodes=False):
-    # type: (Selector, Optional[etree._Element], str, bool) -> List[Any]
+    # type: (Selector, Any, Any, bool) -> List[Any]
     if selector.kind == "regex":
         return re.findall(selector.expr, html_text, flags=re.S)
 
     if selector.kind == "jsonpath":
-        try:
-            payload = json.loads(html_text)
-        except Exception:
+        payload = _json_payload(context, html_text)
+        if payload is None:
             return []
         expr = jsonpath_parse(selector.expr)
-        return [match.value for match in expr.find(payload)]
+        values = [match.value for match in expr.find(payload)]
+        if as_nodes:
+            return values
+        output = []  # type: List[str]
+        for value in values:
+            text_value = _to_text(value)
+            if text_value:
+                output.append(text_value)
+        return output
 
     if context is None:
         return []

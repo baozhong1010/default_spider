@@ -1,0 +1,1278 @@
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+	
+	
+	
+	
+	
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<!doctype html>
+
+<html>
+<head>
+<meta http-equiv="X-UA-Compatible" content="IE=edge" />
+<meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+<meta name="renderer" content="webkit" />
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+	
+		
+		
+		
+	
+
+
+
+
+
+
+
+
+
+<script type="text/javascript">
+var Com_Parameter = {
+	ContextPath:"/ekp/",
+	ResPath:"/ekp/resource/",
+	Style:"default",
+	JsFileList:new Array,
+	StylePath:"/ekp/resource/style/default/",
+	Lang:"zh-cn",
+	CurrentUserId:"16dde2329f6c4e8f8fa59284567a3a3b",
+	Cache:1781010034605,
+	FirstDayInWeek: parseInt('1') - 1,
+	CalendarMinuteStep:parseInt('1'),
+	SessionExpireTip:"会话过期，请打开新页面重新登录后再提交本页面。",
+	ServiceNotAvailTip:"与服务器连接不通，请联系系统管理员或等会再试。",
+	Date_format:"yyyy-MM-dd",
+	DateTime_format:"yyyy-MM-dd HH:mm",
+	SoftDeleteEnableModules:"",
+	ComfirmDelete:"一旦选择了删除，所选记录的相关数据都会被删除，无法恢复！您确认要执行此删除操作吗？",
+	ComfirmSoftDelete:"您确定要将所选记录放入回收站吗？<br>",
+	OptSuccessInfo:"您的操作已成功！",
+	OptFailureInfo:"操作失败！",
+	clientType:"-1"
+};
+</script>
+<script type="text/javascript" src='/ekp/resource/js/domain.js?s_cache=1781010034605'></script>
+<script type="text/javascript" src='/ekp/sys/ui/js/LUI.js?s_cache=1781010034605'></script>
+<script type="text/javascript" src="/ekp/resource/js/common.js?s_cache=1781010034605"></script>
+<script type="text/javascript" src="/ekp/resource/js/sea.js?s_cache=1781010034605"></script>
+
+<script type="text/javascript">
+seajs.config({
+	themes : {
+    "icon": ["sys/ui/extend/theme/default/style/icon.css"],
+    "iconfont": ["sys/ui/extend/theme/default/style/iconfont.css"],
+    "module": ["sys/ui/extend/theme/default/style/module.css"],
+    "form": ["sys/ui/extend/theme/default/style/form.css"],
+    "common": ["sys/ui/extend/theme/default/style/common.css"],
+    "portal": ["sys/ui/extend/theme/default/style/portal.css"],
+    "listview": ["sys/ui/extend/theme/default/style/listview.css"],
+    "sns": ["sys/ui/extend/theme/default/style/sns.css"],
+    "chart": ["sys/ui/extend/theme/default/style/chart.css"],
+    "treefont": ["sys/ui/extend/theme/default/style/treefont.css"],
+    "dialog": ["sys/ui/extend/theme/default/style/dialog.css"],
+    "widget": ["sys/ui/extend/theme/default/style/widget.css"],
+    "step": ["sys/ui/extend/theme/default/style/step.css"],
+    "zone": ["sys/ui/extend/theme/default/style/zone.css"],
+    "profile": ["sys/ui/extend/theme/default/style/profile.css"],
+    "calendar": ["sys/ui/extend/theme/default/style/calendar.css"],
+    "prompt": ["sys/ui/extend/theme/default/style/listview.css"]
+},
+	paths: {
+		'lui': 'sys/ui/js'
+	},
+	alias: {
+		'lui/jquery': 'resource/js/jquery',
+		'lui/jquery-ui': 'resource/js/jquery-ui/jquery.ui'
+	},
+	preload: ['/ekp/resource/js/plugin-theme.js','/ekp/resource/js/plugin-lang.js'],
+	debug: true,
+ 	base: '/ekp',
+ 	env : {
+ 	 	contextPath: '/ekp',
+ 		now : '2026-06-10 21:09',
+ 		pageMaxWidth:'1200px',
+ 		pattern : {
+ 			date : 'yyyy-MM-dd',
+ 			datetime : 'yyyy-MM-dd HH:mm',
+ 			time : 'HH:mm'
+ 		},
+ 		locale : "zh-cn",
+ 		config : {},
+ 		cache : 1781010034605
+ 	}
+});
+seajs.use([ 'lui/parser', 'lui/jquery', 'lui/dialog', 'theme!common', 'theme!icon','theme!iconfont' ],
+	function(parser, $) {
+		window.dingTalkEvent = function(){
+			var clientType = Com_Parameter.clientType;
+			if(clientType=='-3'){
+				Com_AddEventListener(document, "click", function(){
+					var eventObj = Com_GetEventObject();
+					var eleObj = eventObj.srcElement || eventObj.target;
+					var tagName = eleObj.tagName;
+					if(tagName.toLowerCase()=='a'){
+						var target = $(eleObj).attr('target');
+						var href = $(eleObj).attr('href');
+						if(target=='_blank' && href && href.indexOf('javacript')==-1){
+							$(eleObj).attr('href',Com_SetUrlParameter(href,'ddtab',true));
+						}
+					}
+					return true;
+				});
+			
+				var curl = window.location.href;
+				// 如果打开的是流程预览页面
+				if(window.hasReviewButtons()){
+					// 以起草人身份操作处理
+					$("#drafterOptButton").attr("onclick","").off("click").on("click",function(){
+						showTipWindow(curl);
+					});     
+					
+					// 以特权人身份操作
+					$("#authorityOptButton").attr("onclick","").off("click").on("click",function(){
+						showTipWindow(curl);
+					});
+				}
+				
+				// 后台管理
+				$(".lui_list_left_sidebar_td div").each(function(i,n){
+					var item = $(n).html();
+					if($(n).attr("data-lui-type")=="lui/data/source!Static" && item.indexOf("lui_iconfont_navleft_com_background")>=0){
+						console.log("item=>"+item);
+						// /javascript:LUI.pageOpen\(\'\/.*sys\/profile.*?_blank\'\);/
+						// var rgx = "javascript:LUI.pageOpen('/ekp/sys/profile/index.jsp#app/ekp/km/review','_blank');";
+						var replaceText = "javascript:showTipWindow('"+curl+"');";
+						// console.log(item.replace(/javascript:LUI.pageOpen\(\'\/.*sys\/profile.*?[_blank|_rIframe]\'\);/,replaceText));
+						$(n).html(item.replace(/javascript:LUI.pageOpen\(\'\/.*sys\/profile.*?[_blank|_rIframe]\'\);/,replaceText));
+					}
+				});
+			}
+		};
+		
+		// 检测流程审批以起草人处理、以特权人处理点击
+		window.hasReviewButtons = function(){
+			var flag = false;
+			var curl = window.location.href;
+			// 流程预览页面 
+		    if($("#drafterOptButton").length > 0 || $("#authorityOptButton").length > 0){
+		    	flag = true;
+		    }
+			return flag;
+		}
+		
+		// 打开弹框提示在外部打开
+		window.showTipWindow = function (url){
+			// 添加用户token
+			var outToken = "MTZkZGUyMzI5ZjZjNGU4ZjhmYTU5Mjg0NTY3YTNhM2I=";
+			// 必须编码，防止#导致参数无法接收
+			url = url.replace(/#/g,"%23");
+			if(url.indexOf("?")>=0){
+				url+="&outToken="+outToken;	
+			}else{
+				url+="?outToken="+outToken;	
+			}
+			
+			var innerHTML = "<div class='model'>"                   +
+							"	<div class='model-header'>"         +
+							"		<span class='close'>×</span>"   + 
+							"	</div>"                             +
+							"<div class='model-body no-support-msg'>"              +
+							"	<div class='pic'><img src='"+Com_Parameter.ContextPath+"resource/images/no_support_ding.png?s_cache=1781010034605'/></div>"                    +
+							"	<div class='msg'>暂不支持在钉钉PC端内打开，如有需要，请打开到外部浏览器。</div>"+
+							"	<div class='btn'>打开到外部浏览器</div>"                    +
+							"</div>"                                +
+							"<div class='model-footer'></div>"      +
+							"</div>"                                +
+							"<div class='mask'></div>";
+			// 防止弹出层重复添加
+			if(typeof $(".model").html() == "undefined"){
+				$("body").append(innerHTML);
+				// 打开事件
+				$(".no-support-msg .btn").on("click",function(){
+					window.open(url,'_blank');
+				});
+			}
+			
+			// 展示弹窗
+			showModel();
+
+			function showModel(){
+				// 模态窗里面必须是在外部打开
+				try{
+					window.open = function(url,target,specs,replace){
+						if(target && target=='_blank' && url){
+							url = Com_SetUrlParameter(url);
+						}
+						var win = window.Com_openWin(url,target,specs,replace);
+						return win;
+					};
+				}catch(e){
+					alert(e);
+				}
+				
+				var wW=$(window).width();  //浏览器可视区域宽度和高度
+				var wH=$(window).height();
+				var oW=$(".model").innerWidth(); //获取类叫model的宽度和高度
+				var oH=$(".model").innerHeight();
+				$(".model").show().css({"top":(wH-oH)/2+"px","left":(wW-oW)/2+"px"});
+				$(".mask").fadeIn();
+			}
+			$(window).resize(function(){
+				if($(".model").is(":visible")){ //弹出框必须可见后 才能调用showModel()
+					showModel();
+				}
+			});
+			$(".close").click(function(){
+				// 关闭模态窗之后恢复钉钉打开窗口方式
+				try{
+					window.open = function(url,target,specs,replace){
+						if(target && target=='_blank' && url){
+							url = Com_SetUrlParameter(url, "ddtab","true");
+						}
+						var win = window.Com_openWin(url,target,specs,replace);
+						return win;
+					};
+				}catch(e){
+					console.log(e);
+				}
+				
+				$(".mask").fadeOut();
+				$(".model").hide();
+			});
+			$(document).keydown(function(ev){
+				if(ev.keyCode==27){  //当按下键盘Esc时===》close关闭按钮
+//					$(".model").hide();
+//					$(".mask").fadeOut();
+					$(".close").trigger("click");//trigger("事件名")  模拟事件
+				}
+			})
+		};
+		
+		$(document).ready(function() {
+			parser.parse();
+			dingTalkEvent();
+		});
+	}); 
+</script>
+
+
+<link rel="shortcut icon" href="/ekp/favicon.ico">
+
+<script type="text/javascript">
+  seajs.use(['theme!form']);
+</script>
+<title>
+	
+		上海市第一人民医院维保服务-手术系统维保采购招标项目招标公告
+		公告发布
+	
+</title>
+
+		
+
+<!DOCTYPE html>
+<!-- 头部页眉  -->
+<html>
+<style>
+    *{
+        margin: 0px;
+        padding: 0px;
+    }
+
+    .lui_portal_header_menu_frame {
+        box-shadow: 0 1px 1px rgb(0 0 0 / 15%);
+        background: url(images/banner_bg_t.png) repeat-x;
+    }
+
+    .lui_portal_header_menu_menu {
+        height: 55px;
+        margin: 0 auto;
+    }
+
+    .lui_portal_header_menu_content {
+        background: transparent;
+        height: 63px;
+        margin: 0 auto;
+        position: relative;
+    }
+
+    .clearfloat {
+        zoom: 1;
+    }
+
+    .lui_portal_header_menu_l {
+        margin-top: -33px;
+    }
+
+    .lui_portal_header_menu_c {
+        padding: 0 0px;
+    }
+
+    .lui_portal_header_menu_item_div {
+        position: relative;
+        overflow: hidden;
+        height: 40px;
+        text-align: right;
+    }
+
+    .lui_portal_header_menu_item_c .header_a:hover {
+        color: #47b5e6;
+    }
+
+    .lui_portal_header_menu_item_c a {
+        color: #333;
+        text-decoration: none;
+    }
+    /*正常的未被访问过的链接*/
+    .lui_portal_header_menu_item_c a:link {
+        text-decoration: none;
+    }
+    /*已经访问过的链接*/
+    .lui_portal_header_menu_item_c a:visited {
+        text-decoration: none;
+    }
+    /*鼠标划过(停留)的链接*/
+    .lui_portal_header_menu_item_c a:hover {
+        text-decoration: none;
+    }
+    /* 正在点击的链接*/
+    .lui_portal_header_menu_item_c a:active {
+        text-decoration: none;
+    }
+
+    .lui_portal_header_menu_item_left, .lui_portal_header_menu_item_right {
+        background: none;
+        line-height: 38px;
+    }
+
+    .lui_portal_header_menu_item_frame {
+        position: absolute;
+        overflow: hidden;
+    }
+
+    .lui_portal_header_menu_item_left {
+        position: absolute;
+        width: 23px;
+        left: 0px;
+        height: 38px;
+        cursor: pointer;
+        z-index: 999;
+    }
+
+    .lui_portal_header_menu_item_right {
+        width: 23px;
+        text-align: right;
+        position: absolute;
+        right: 4px;
+        height: 38px;
+        cursor: pointer;
+    }
+
+    .lui_portal_header_menu_item_left:before, .lui_portal_header_menu_item_right:before {
+        margin-top: -2px;
+        display: inline-block;
+        content: "";
+        width: 16px;
+        height: 16px;
+        background: url(images/nav_arrow_blue_sprite.png) no-repeat left top;
+        vertical-align: middle;
+    }
+
+    .lui_portal_header_menu_item_right:before {
+        background-position: -16px 0;
+    }
+
+    .lui_portal_header_menu_item_l {
+        margin-left: 2px;
+        margin-right: 2px;
+        cursor: pointer;
+    }
+
+    .lui_portal_header_menu_item_r{
+        margin-left: -7.5px;
+    }
+
+    .lui_portal_header_menu_item_c {
+        color: #333;
+        padding-left: 16px;
+        padding-right: 16px;
+        height: 38px;
+        margin-top: 1px;
+        font-size: 16px;
+        line-height: 38px;
+    }
+
+    .lui_portal_header_menu_item_body {
+        text-align: left;
+    }
+
+    .lui_portal_header_menu_logo {
+        padding-top: 23px;
+    }
+
+    .lui_portal_header_menu_logo {
+        float: left;
+    }
+
+    .lui_portal_header_menu_logo .lui_portal_header_logo_div {
+        height: 48px;
+        line-height: 48px;
+    }
+
+    .lui_portal_header_logo_div {
+        display: inline-block;
+        overflow: hidden;
+        vertical-align: middle;
+        cursor: pointer;
+        font-size: 0;
+    }
+
+    .lui_portal_header_menu_logo .lui_portal_header_logo_div img {
+        max-width: 100%;
+        max-height: 100%;
+        /*margin-left: 50px;*/
+    }
+    .lui_portal_header_logo_img {
+        vertical-align: middle;
+
+    }
+    img {
+        border: 0;
+    }
+
+</style>
+
+<script type="text/javascript">
+
+    function toLeft() {
+        $(".lui_portal_header_menu_item_frame").scrollLeft(-108);
+    }
+    function toRight() {
+        $(".lui_portal_header_menu_item_frame").scrollLeft(108);
+    }
+
+</script>
+<body>
+<div class="lui_portal_header" style="">
+    <div class="lui_portal_header_menu_frame">
+        <div style="width: 1200px;min-width:980px;" class="lui_portal_header_menu_content clearfloat">
+            <!-- LOGO 图标 -->
+            <div class="lui_portal_header_menu_logo">
+                <div class="lui_portal_header_logo_div" onclick="location.href='../..'" title="返回首页"><img class="lui_portal_header_logo_img" src="/ekp/sys/news/images/header_banner.png"></div>
+            </div>
+        </div>
+        <!-- 菜单显示 -->
+        <div style="width: 1200px;min-width:980px;" class="lui_portal_header_menu_menu clearfloat">
+            <div data-lui-type="lui/base!DataView" style="" id="lui-id-6" data-lui-cid="lui-id-6" data-lui-parse-init="5">
+                <div class="lui_portal_header_menu_l">
+                    <div class="lui_portal_header_menu_r">
+                        <div class="lui_portal_header_menu_c">
+                            <div class="lui_portal_header_menu_item_div">
+                                <div class="lui_portal_header_menu_item_left" style="" onclick="toLeft();"></div>
+                                <div class="lui_portal_header_menu_item_frame" style="left: 20px; right: 23px;">
+                                    <div class="lui_portal_header_menu_item_body" style="white-space: nowrap; width: 1054px;">
+                                        <div style="display: inline-block; vertical-align: top;" data-portal-id="170b89c7e3177fd28da639d4d51abf40" class="lui_portal_header_menu_item_div">
+                                            <div class="lui_portal_header_menu_item_l">
+                                                <div class="lui_portal_header_menu_item_r" style="margin-left: 1.5px">
+                                                    <div class="lui_portal_header_menu_item_c"><a class="header_a" href="https://www.shabidding.com/ekp/resource/anonym.jsp?pageId=170b89c7e3177fd28da639d4d51abf40">首页</a></div>
+                                                </div>
+                                            </div>
+                                        </div>
+                                        <div class="lui_portal_header_menu_item_line" style="display: inline-block;vertical-align: top;"></div>
+                                        <div style="display: inline-block;vertical-align: top;" data-portal-id="170b89c7e34301f4d11b200434b9de17" class="lui_portal_header_menu_item_div">
+                                            <div class="lui_portal_header_menu_item_l">
+                                                <div class="lui_portal_header_menu_item_r">
+                                                    <div class="lui_portal_header_menu_item_c"><a class="header_a" href="https://www.shabidding.com/ekp/resource/anonym.jsp?pageId=170b89c7e34301f4d11b200434b9de17">走进国招</a></div>
+                                                </div>
+                                            </div>
+                                        </div>
+                                        <div class="lui_portal_header_menu_item_line" style="display: inline-block;vertical-align: top;"></div>
+                                        <div style="display: inline-block;vertical-align: top;" data-portal-id="170b89c7e36826204838ecd4ffcaec79" class="lui_portal_header_menu_item_div">
+                                            <div class="lui_portal_header_menu_item_l">
+                                                <div class="lui_portal_header_menu_item_r">
+                                                    <div class="lui_portal_header_menu_item_c"><a class="header_a" href="https://www.shabidding.com/ekp/resource/anonym.jsp?pageId=170b89c7e36826204838ecd4ffcaec79">行业案例</a></div>
+                                                </div>
+                                            </div>
+                                        </div>
+                                        <div class="lui_portal_header_menu_item_line" style="display: inline-block;vertical-align: top;"></div>
+                                        <div style="display: inline-block;vertical-align: top;" data-portal-id="170b89c7e387f1f43f0e34949d89d9d7" class="lui_portal_header_menu_item_div">
+                                            <div class="lui_portal_header_menu_item_l">
+                                                <div class="lui_portal_header_menu_item_r">
+                                                    <div class="lui_portal_header_menu_item_c"><a class="header_a" href="https://www.shabidding.com/ekp/resource/anonym.jsp?pageId=170b89c7e387f1f43f0e34949d89d9d7">公告公示</a></div>
+                                                </div>
+                                            </div>
+                                        </div>
+                                        <div class="lui_portal_header_menu_item_line" style="display: inline-block;vertical-align: top;"></div>
+                                        <div style="display: inline-block;vertical-align: top;" data-portal-id="170b89c7e3a3ac0f9bb7b744819bc4d8" class="lui_portal_header_menu_item_div">
+                                            <div class="lui_portal_header_menu_item_l">
+                                                <div class="lui_portal_header_menu_item_r">
+                                                    <div class="lui_portal_header_menu_item_c"><a class="header_a" href="https://www.shabidding.com/ekp/resource/anonym.jsp?pageId=170b89c7e3a3ac0f9bb7b744819bc4d8">国招动态</a></div>
+                                                </div>
+                                            </div>
+                                        </div>
+                                        <div class="lui_portal_header_menu_item_line" style="display: inline-block;vertical-align: top;"></div>
+                                        <div style="display: inline-block;vertical-align: top;" data-portal-id="170b89c7e3bc16b3e8740a14af2a0e81" class="lui_portal_header_menu_item_div">
+                                            <div class="lui_portal_header_menu_item_l">
+                                                <div class="lui_portal_header_menu_item_r">
+                                                    <div class="lui_portal_header_menu_item_c"><a class="header_a" href="https://www.shabidding.com/ekp/resource/anonym.jsp?pageId=170b89c7e3bc16b3e8740a14af2a0e81">法律法规</a></div>
+                                                </div>
+                                            </div>
+                                        </div>
+                                        <div class="lui_portal_header_menu_item_line" style="display: inline-block;vertical-align: top;"></div>
+                                        <div style="display: inline-block;vertical-align: top;" data-portal-id="170b89c7e3decfd5e78981a4ea9b12c6" class="lui_portal_header_menu_item_div">
+                                            <div class="lui_portal_header_menu_item_l">
+                                                <div class="lui_portal_header_menu_item_r">
+                                                    <div class="lui_portal_header_menu_item_c"><a class="header_a" href="https://www.shabidding.com/ekp/resource/anonym.jsp?pageId=170b89c7e3decfd5e78981a4ea9b12c6">联系我们</a></div>
+                                                </div>
+                                            </div>
+                                        </div>
+                                        <div class="lui_portal_header_menu_item_line" style="display: inline-block;vertical-align: top;"></div>
+                                        <div style="display: inline-block;vertical-align: top;" data-portal-id="175d8cfb24da593fca77e7c4ce0bfd57" class="lui_portal_header_menu_item_div">
+                                            <div class="lui_portal_header_menu_item_l">
+                                                <div class="lui_portal_header_menu_item_r">
+                                                    <div class="lui_portal_header_menu_item_c"><a class="header_a" href="https://zb.shabidding.com/">SITC电子采购平台</a></div>
+                                                </div>
+                                            </div>
+                                        </div>
+                                        <div class="lui_portal_header_menu_item_line" style="display: inline-block;vertical-align: top;"></div>
+                                        <div style="display: inline-block;vertical-align: top;" data-portal-id="171bfda7eb00d799ccaba9d45938930e" class="lui_portal_header_menu_item_div">
+                                            <div class="lui_portal_header_menu_item_l">
+                                                <div class="lui_portal_header_menu_item_r">
+                                                    <div class="lui_portal_header_menu_item_c"><a class="header_a" href="https://www.shabidding.com/ekp/km/supplier/km_supplier_manage/registerUser.jsp">供应商注册</a></div>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="lui_portal_header_menu_item_right" style="" onclick="toRight();"></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+</body>
+</html>
+
+
+		<style type="text/css">
+		.lui_paragraph_title {
+			font-size: 15px;
+			color: #15a4fa;
+			padding: 15px 0px 5px 0px;
+		}
+
+		.lui_paragraph_title span {
+			display: inline-block;
+			margin: -2px 5px 0px 0px;
+		}
+
+		.inputsgl[readonly], .tb_normal .inputsgl[readonly] {
+			border: 0px;
+			color: #868686
+		}
+
+		.upload_list_download_count {
+			display: none;
+		}
+
+		.contentDiv{
+			height: 100%;
+		}
+
+		#lui-id-7{
+		/*	background-color: #15a4fa;*/
+			color:#fff;
+			font-size: 16px;
+		}
+
+		#lui-id-9{
+			background-color: red;
+			font-size: 16px;
+		}
+
+		#lui-id-8{
+		  background-color: #948c90;
+		  color:#fff;
+		  font-size: 16px;
+		}
+
+		 #signup1 .lui_toolbar_btn_l .lui_toolbar_btn_r .lui_toolbar_btn_c {
+			background-color: red;
+			color:#fff;
+			font-size: 15px;
+		}
+
+		.lui_toolbar_frame_float .lui_toolbar_btn_l{
+		 border: none!important;
+		}
+
+		</style>
+		<script type="text/javascript">
+			var formInitData = {
+
+			};
+			var messageInfo = {
+
+			};
+			Com_IncludeFile("swf_attachment.js",
+					"/ekp/sys/attachment/js/", "js",
+					true);
+
+			Com_IncludeFile("pdfobject.min.js",
+					"/ekp/resource/js/", "js", true);
+		</script>
+	
+</head>
+<body class="lui_form_body ">
+
+
+
+
+		<script>
+			function deleteDoc(delUrl) {
+				seajs.use([ 'lui/dialog' ], function(dialog) {
+					dialog.confirm('一旦选择了删除，所选记录的相关数据都会被删除，无法恢复！您确认要执行此删除操作吗？',
+							function(isOk) {
+								if (isOk) {
+									Com_OpenWindow(delUrl, '_self');
+								}
+							});
+				});
+			}
+
+			function openWindowViaDynamicForm(popurl, params, target) {
+				var form = document.createElement('form');
+				if (form) {
+					try {
+						target = !target ? '_blank' : target;
+						form.style = "display:none;";
+						form.method = 'post';
+						form.action = popurl;
+						form.target = target;
+						if (params) {
+							for ( var key in params) {
+								var v = params[key];
+								var vt = typeof v;
+								var hdn = document.createElement('input');
+								hdn.type = 'hidden';
+								hdn.name = key;
+								if (vt == 'string' || vt == 'boolean'
+										|| vt == 'number') {
+									hdn.value = v + '';
+								} else {
+									if ($.isArray(v)) {
+										hdn.value = v.join(';');
+									} else {
+										hdn.value = toString(v);
+									}
+								}
+								form.appendChild(hdn);
+							}
+						}
+						document.body.appendChild(form);
+						form.submit();
+					} finally {
+						document.body.removeChild(form);
+					}
+				}
+			}
+
+			function doCustomOpt(fdId, optCode) {
+				if (!fdId || !optCode) {
+					return;
+				}
+
+				if (viewOption.customOpts && viewOption.customOpts[optCode]) {
+					var param = {
+						"List_Selected_Count" : 1
+					};
+					var argsObject = viewOption.customOpts[optCode];
+					if (argsObject.popup == 'true') {
+						var popurl = viewOption.contextPath
+								+ argsObject.popupUrl + '&fdId=' + fdId;
+						for ( var arg in argsObject) {
+							param[arg] = argsObject[arg];
+						}
+						openWindowViaDynamicForm(popurl, param, '_self');
+						return;
+					}
+					var optAction = viewOption.contextPath
+							+ viewOption.basePath + '?method=' + optCode
+							+ '&fdId=' + fdId;
+					Com_OpenWindow(optAction, '_self');
+				}
+			}
+			window.doCustomOpt = doCustomOpt;
+			var viewOption = {
+				contextPath : '/ekp',
+				basePath : '/sys/news/sys_news_main/sysNewsMain.do',
+				customOpts : {
+
+					____fork__ : 0
+				}
+			};
+
+			Com_IncludeFile("security.js");
+			Com_IncludeFile("domain.js");
+		</script>
+		<script type="text/javascript">
+			$(function() {
+				if (window.ActiveXObject || "ActiveXObject" in window) {
+					var oAcro, oAcro4, oAcro7;
+					var flag = false;
+					for (x = 2; x < 10; x++) {
+						try {
+							oAcro = eval("new ActiveXObject('PDF.PdfCtrl." + x
+									+ "');");
+							if (oAcro) {
+								flag = true;
+							}
+						} catch (e) {
+						}
+					}
+					try {
+						oAcro4 = new ActiveXObject('PDF.PdfCtrl.1');
+						if (oAcro4)
+							flag = true;
+					} catch (e) {
+					}
+					try {
+						oAcro7 = new ActiveXObject('AcroPDF.PDF.1');
+						if (oAcro7)
+							flag = true;
+					} catch (e) {
+					}
+
+					if (flag) {
+						//IE有pdf插件
+						var hasAtt = "true";
+						if (hasAtt == 'true') {
+							var url = "/ekp/resource/attachment/sys_att_main/sysAttMain.do?method=readSteam&fdId="
+								+ "19eaf89f43eaa66d3720a0c42f9b892b";
+							$("#pdfInfo").attr("src", url);
+						}
+					} else {
+						alert("对不起,您还没有安装PDF阅读器软件呢,为了方便预览PDF文档,请选择安装,安装完毕后重新打开网页即可在线预览!");
+						location = 'http://ardownload.adobe.com/pub/adobe/reader/win/9.x/9.3/chs/AdbeRdr930_zh_CN.exe';
+					}
+				} else {
+					//非IE浏览器
+					var hasAtt = "true";
+					if (hasAtt == 'true') {
+						var baseurl = "/ekp/resource/pdfjs/web/viewer.html?file=";
+						var url = "/ekp/resource/attachment/sys_att_main/sysAttMain.do?method=download&fdId=19eaf89f43eaa66d3720a0c42f9b892b";
+						$("#pdfInfo").attr("src",baseurl+encodeURIComponent(url));
+					}
+				}
+			});
+		</script>
+		<script type="text/javascript">
+			//页面加载时判断是否可以报名
+			$(document).ready(function() {
+				var fdQuoteWay = "0";
+				if (fdQuoteWay == 0) {
+					$('#zhengbao').show();
+					$('#danjia').hide();
+				} else {
+					$('#zhengbao').hide();
+					$('#danjia').show();
+				}
+			});
+
+			function isCertification() {
+				$
+						.ajax({
+							url : "/ekp/resource/news/sys_news_main/sysNewsMain.do?method=isCertification",
+							type : 'POST',
+							dataType : 'json',
+							async : false,
+							success : function(data) {
+								if (data["isCertification"]) {
+									singup()
+								} else {
+									if (data["isAnonymous"]) {
+										Com_OpenWindow("/ekp/sys/news/sys_news_main/sysNewsMain.do?method=view&fdId=19eaf8872a18df3d6fb234a45ce886a3", '_self');
+									} else {
+										seajs.use([ 'lui/dialog' ], function(dialog) {
+											dialog.alert("您还未认证通过，请补全信息并审批通过后，方能领购，谢谢！");
+										});
+										return;
+									}
+								}
+							},
+							error : function() {
+								seajs.use([ 'lui/dialog' ],
+										function(dialog) {
+											dialog.alert("非常抱歉，暂未找到相关信息！");
+										});
+								return;
+							}
+						});
+			}
+
+			//点击报名，请求后台判断当前用户是否已经报名如果已经报名则提示已经报名，如果为报名则跳转至报名页面；
+			function singup() {
+				var singup = false;
+				$
+						.ajax({
+							url : '/ekp/sys/news/sys_news_main/sysNewsMain.do?method=isSignUp&fdNewsId=19eaf8872a18df3d6fb234a45ce886a3',
+							type : 'POST',
+							dataType : 'json',
+							async : false,
+							data : {
+								'fdNewsId' : ""
+							},
+							success : function(data) {
+								if (data["isSign"]) {
+									singup = true;
+								}
+							},
+							error : function() {
+								seajs.use([ 'lui/dialog' ], function(dialog) {
+									dialog.alert("非常抱歉，暂未找到相关信息！");
+								});
+								return;
+							}
+						});
+				if (singup) {
+					//已经买过标书了。
+					seajs.use([ 'lui/dialog' ], function(dialog) {
+						dialog.alert("您已保存相关领购信息或者提交的领购信息正在审批中,请前往领购列表查看！");
+					});
+					return;
+				} else {
+					var inTime = "true";
+					if (inTime){
+						var fdEasyUrl = "";
+						if (fdEasyUrl){
+							Com_OpenWindow("/ekp/sys/login/sysAutoLogin.do?method=elogin&redirectUrl=",'_black');
+						}else {
+							Com_OpenWindow("/ekp/km/professional/km_professional_sign/kmProfessionalSign.do?method=add&fdNewId=19eaf8872a18df3d6fb234a45ce886a3", '_black');
+						}
+					}else {
+						seajs.use([ 'lui/dialog' ], function(dialog) {
+							dialog.alert("当前公告的领购时间还未开始或者已结束.");
+						});
+						return;
+					}
+				}
+			}
+
+			//匿名下载附件
+			function downloadAtt(id){
+				Com_OpenWindow("/ekp/resource/attachment/sys_att_main/sysAttMain.do?method=download&fdId=" + id, '_black');
+			}
+		</script>
+		<div id="toolbar" data-lui-type="lui/toolbar!ToolBar" style="display:none;">	
+<script type="text/config">
+{"count": 3}
+</script>
+<div data-lui-type="lui/view/layout!Javascript" style="display:none;">	
+<script type="text/config">
+{
+    "kind": "toolbar",
+    "css": "/ekp/theme!toolbar"
+}
+</script>
+<script type='text/code' xsrc='/sys/ui/extend/toolbar/toolbar_float.js?s_cache=1781010034605'>
+</script>
+</div>
+		     
+				<div data-lui-type="lui/toolbar!Button" style="display:none;">	
+<script type="text/config">
+{
+    "click": "Com_OpenWindow('https://zb.shabidding.com/ebidding/#/login','_blank');",
+    "isForcedAddClass": false,
+    "order": 0,
+    "text": "供应商登录"
+}
+</script>
+</div>
+			
+
+			
+			
+			<div data-lui-type="lui/toolbar!Button" style="display:none;">	
+<script type="text/config">
+{
+    "click": "Com_CloseWindow();",
+    "isForcedAddClass": false,
+    "order": 5,
+    "text": "关闭"
+}
+</script>
+</div>
+	
+		</div>
+	
+<div class="lui_form_path_frame" style="width:90%; min-width:980px;max-width:1200px; margin:0px auto;">
+	
+</div>
+<div id="lui_validate_message" style="width:90%; min-width:980px; max-width:1200px;margin:0px auto;"></div>
+<table class="tempTB" style="width:90%; min-width:980px;max-width:1200px; margin: 0px auto;">
+	<tr>
+		
+			
+			 
+			    <!-- “左侧” 表单内容展示区TD单元格 -->
+				<td valign="top" class="lui_form_content_td">
+					<div class="lui_form_content">
+						
+		<div data-lui-type="lui/panel!TabPage" style="display:none;">	
+<script type="text/config">
+{
+    "collapsed": false,
+    "expand": false,
+    "toggle": "true",
+    "vars": {"navwidth": "90%"}
+}
+</script>
+<div data-lui-type="lui/view/layout!Javascript" style="display:none;">	
+<script type="text/config">
+{"kind": "tabpage"}
+</script>
+<script type='text/code' xsrc='/sys/ui/extend/panel/tabpage.js?s_cache=1781010034605'>
+</script>
+</div>
+			
+					<div align="center">
+						<span style="margin-top: 20px;">
+							<font size="5">
+								<b>
+									【2305042371】上海市第一人民医院维保服务-手术系统维保采购招标项目招标公告
+								</b>
+							</font>
+						</span></div>
+					<div align="center" style="margin-top: 20px;"><div id='_____rtf_____docContent' style='display:none'><div name='rtf_docContent'></div></div><div id='_____rtf__temp_____docContent'></div><script type="text/javascript">//<![CDATA[
+try{if(window.LUI && window.LUI.replaceRtfMainDataCard)LUI.replaceRtfMainDataCard("rtf_docContent");}catch(e){}
+//]]></script>
+<script type="text/javascript">//<![CDATA[
+Com_IncludeFile('ckresize.js', 'ckeditor/');
+//]]></script>
+<script type="text/javascript">//<![CDATA[
+CKResize.addPropertyName('docContent');
+//]]></script>
+<script type="text/javascript">//<![CDATA[
+Com_AddEventListener(window, 'load', function(){CKResize.____ckresize____(true);})
+//]]></script>
+</div>
+					<iframe id="pdfInfo" style="margin-top: 20px;" frameborder="0"  width="100%" height="800px"></iframe>
+					
+
+					
+			
+			
+			
+		</div>
+	
+					</div>
+				</td>
+				<!-- “右侧” 侧边栏展示区TD单元格 -->
+				<td valign="top" style="width:30%;display:none;" class="lui_form_sidebar_td">
+					<div style="padding-left:15px;" class="lui_form_sidebar">
+						
+					</div>
+				</td>
+			
+			
+			
+			
+			
+		
+	</tr>
+</table>
+
+
+
+<script type="text/javascript">
+	
+		
+		
+			LUI.ready(function(){
+				seajs.use('lui/qrcode',function(qrcode){
+					qrcode.QrcodeToTop();
+				});
+			});
+		
+	
+
+	function Sidebar_Refresh(show){
+		var sidebar = LUI.$(".lui_form_sidebar");
+		if(sidebar.length > 0){
+			var tdContain = sidebar.parent();
+			tdContain.show();
+			if(show){
+				return;
+			}
+			var height = sidebar.height();
+			if(height<20){
+				tdContain.hide();
+			}else{
+				var width = tdContain.parent().width();
+				if(width * 0.3 < 200){
+					tdContain.css("max-width",'200px');
+				}else{
+					tdContain.css("max-width",width * 0.3 + 'px');
+				}
+			}
+		}
+	}
+	LUI.ready(function(){Sidebar_Refresh();});
+</script>
+<div style="height:20px;"></div>
+<div id="top" data-lui-type="lui/top!totop" style="display:none;">	
+</div>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+	<div id="top" data-lui-type="lui/top!totop" style="display:none;">	
+</div>
+	
+		
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+	
+
+
+</body>
+</html>
+
+
+
+<!-- 底部页脚 -->
+
+
+<script type="text/javascript">
+	$(document).ready(function() {
+		changeEnglish();
+	})
+
+	window.onload = function () {
+		// Hide redundant back to header tags
+		var values = document.getElementsByClassName("lui-component com_goto");
+		if (values.length > 1) {
+			var value = values[1];
+			var topValues = value.getElementsByClassName("com_gototop");
+			if (topValues.length > 1) {
+				topValues[0].setAttribute("style", "display:none");
+			}
+		}
+
+		// The window height depends on the image
+		var footerHeight = 0,
+				footerTop = 0,
+				$footer = $(".shzb-footer");
+		//get div#footer height
+		footerHeight = $footer.height();
+		var headerHeight = $(".lui_portal_header_menu_frame").height();
+		var bodyHeight = $(".lui_form_content_td").height();
+		//div#footer distance from the top of the screen
+		footerTop = ($(document).height() - footerHeight - 15 - headerHeight - bodyHeight);
+		if (footerTop > 10) {
+			$(".lui_portal_footer").css("margin-top", footerTop + 'px');
+		}
+
+		var elementsByTagNameElement = document.getElementsByClassName("lui_form_content")[0].getElementsByTagName("div")[0];
+		var elementsByClassNameElement = elementsByTagNameElement.getElementsByTagName("div")[0];
+		var contentTag = elementsByClassNameElement.getElementsByTagName("b")[0];
+		var contentT;
+		if (typeof contentTag !== 'undefined') {
+			if (typeof contentTag.innerText == 'string') {
+				contentT = contentTag.innerText;
+			} else if (typeof contentTag.innerHTML == 'string') {
+				contentT = contentTag.innerHTML;
+			} else {
+				contentT = contentTag.textContent;
+			}
+			console.log(contentT);
+			var pText = '上海北外滩91街坊建筑概念方案';
+			if (contentT.indexOf(pText) != -1) {
+				var tagName = document.createElement("span")
+				tagName.innerHTML = "<p style='font-size: 17px; margin-top: 10px; font-weight: bold'>2021-08-06 10:18:18</p>";
+				elementsByClassNameElement.appendChild(tagName);
+			}
+		}
+	}
+
+	function changeEnglish(){
+		var url = "/ekp/resource/news/sys_news_main/sysNewsMain.do?method=savelanguage";
+		$.ajax({
+			url: encodeURI(url),
+			type: "POST",
+			dataType:"json",
+			success: function(data) {
+				if("EN"==data.languaged){
+					$(".shzb-f-left a:eq(0)").html("Former official website");
+					$(".shzb-f-left a:eq(1)").html("Enterprise mailbox");
+					$(".shzb-f-txt").html("Contact US");
+					$(".shzb-f-mid ul li:eq(0)").html("Addrss: 14F Mei Li Yuan Mansion,No. 358 Yan An Road(W),Shanghai, China");
+					$(".shzb-f-mid ul li:eq(1)").html("Zip code:   200040");
+					$(".shzb-f-mid ul li:eq(2)").html("Tel: +8621 62791919");
+					$(".shzb-f-mid ul li:eq(3)").html("Fax: +8621 62791616");
+					$(".shzb-f-mid ul li:eq(4)").html("E-mail: bidsitc@shabidding.com");
+					$(".shzb-f-copy span").html("Copyright @ Shanghai International Tendering Co., LTD∣ All rights reserved  ");
+					$(".shzb-f-copy a:eq(1)").html("");
+					$(".shzb-f-copy a:eq(2)").html("");
+
+					var headerTextList = document.getElementsByClassName("header_a");
+					var headerList = document.getElementsByClassName("lui_portal_header_menu_item_div");
+					var index = 0;
+					for (var i = 0; i < headerTextList.length; i++) {
+						switch(headerTextList[i].text){
+							case "首页":
+								headerTextList[i].text = "Overview";
+								break;
+							case "走进国招":
+								headerTextList[i].text = "About Us";
+								break;
+							case "行业案例":
+								headerTextList[i].text = "Cases";
+								break;
+							case "公告公示":
+								headerTextList[i].text = "Announcement";
+								break;
+							case "国招动态":
+								headerTextList[i].text = "Newsroom";
+								break;
+							case "法律法规":
+								headerTextList[i].text = "";
+								break;
+							case "政策法规":
+								headerTextList[i].text = "";
+								break;
+							case "联系我们":
+								headerTextList[i].text = "Contact";
+								break;
+							case "电子采购平台":
+								headerTextList[i].text = "";
+								break;
+							case "SITC电子采购平台":
+								headerTextList[i].text = "";
+								break;
+							case "供应商注册":
+								headerTextList[i].text = "";
+								break;
+							default:
+								headerTextList[i].text = headerTextList[i].text;
+						}
+						if(headerTextList[i].text === "") {
+							console.log(headerList[i + 1]);
+							console.log(headerList[i + 1].getElementsByClassName("lui_portal_header_menu_item_l")[0]);
+							headerList[i + 1].getElementsByClassName("lui_portal_header_menu_item_l")[0].setAttribute("style", "display:none");
+						}
+					}
+					$(".lui_portal_header_menu_item_body").removeAttr("style", "text-align");
+					$(".lui_portal_header_menu_item_body").attr("style", "margin-right:-32px");
+					$(".lui_portal_header_menu_item_left").remove();
+					$(".lui_portal_header_menu_item_right").remove();
+				}
+			}
+		});
+	}
+
+</script>

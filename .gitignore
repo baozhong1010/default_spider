@@ -49,6 +49,9 @@ coverage.xml
 *.cover
 .hypothesis/
 .pytest_cache/
+tmp/
+tests/
+local_test_outputs/
 
 # 日志文件
 *.log
