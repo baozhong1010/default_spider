@@ -52,7 +52,7 @@ class PdfBodyDetector(object):
         r".*?\.attr\(\s*['\"]src['\"]\s*,\s*baseurl\s*\+\s*encodeURIComponent\(url\)\s*\)"
     )
 
-    # ????????? download ? readSteam???????? readSteam?
+    # 部分站点会同时暴露 download 和 readSteam，这里优先提取 readSteam 正文流地址。
     READ_STREAM_URL_PATTERN = r"['\"]([^'\"]*sysAttMain\.do\?method=readSteam&fdId=[^'\"]+)['\"]"
     READ_STREAM_JOIN_PATTERN = r"['\"]([^'\"]*sysAttMain\.do\?method=readSteam&fdId=)['\"]\s*\+\s*['\"]([0-9a-f]+)['\"]"
 
@@ -134,7 +134,7 @@ class PdfBodyDetector(object):
         if viewer_var_match:
             viewer_url = resolve_url(page_url, viewer_var_match.group(1))
             pdf_url = resolve_url(page_url, viewer_var_match.group(2))
-            # viewer ???? download ??????????????????????
+            # viewer 中常同时出现 download 地址，若能提取 readSteam 则优先使用。
             stream_url = self._extract_read_stream_url(page_url, html_text)
             preferred_url = stream_url or pdf_url
             if self._is_pdf_url(preferred_url):
@@ -255,12 +255,12 @@ class PdfBodyConverter(object):
         if not text:
             return False
 
-        # ?? PDF ??????? ToUnicode ???????????? (cid:123) ????
+        # 某些 PDF 缺少有效的 ToUnicode 映射时，提取结果会出现大量 (cid:123) 垃圾标记。
         cid_tokens = len(self.CID_TOKEN_PATTERN.findall(text))
         if cid_tokens >= 5:
             return True
 
-        # ??????????????????????????????
+        # 控制字符大量出现时，通常也说明提取文本已经损坏。
         control_chars = len(self.CONTROL_CHAR_PATTERN.findall(text))
         return control_chars >= 20
 

@@ -1,0 +1,1 @@
+nohup python run.py schedule >/dev/null 2>&1 &

@@ -26,6 +26,15 @@ from spider.utils.logging import log_event
 from spider.utils.metrics import SiteMetrics
 
 
+def _spawn_background_task(coro):
+    # type: (object) -> object
+    # Python 3.6 没有 asyncio.create_task，这里统一走兼容封装。
+    create_task = getattr(asyncio, "create_task", None)
+    if create_task is not None:
+        return create_task(coro)
+    return asyncio.ensure_future(coro)
+
+
 class SpiderEngine(object):
     def __init__(
         self,
@@ -111,9 +120,9 @@ class SpiderEngine(object):
         entry_urls = override_entry_urls or site.entry_urls
         request_tasks = build_list_request_tasks(entry_urls, site.request, site.pagination)
 
-        # ???????????????? worker ???????????????????
+        # 通过队列把列表抓取与详情 worker 解耦，列表页产出后即可继续并发消费详情。
         detail_queue = asyncio.Queue()
-        # ??????????????????????????????
+        # 避免同一详情链接被重复入队，导致重复抓取。
         queued_detail_urls = set()
         queued_detail_urls_lock = asyncio.Lock()
 
@@ -605,14 +614,14 @@ class SpiderEngine(object):
             while True:
                 item = await detail_queue.get()
                 try:
-                    # ? None ???????????????? worker ??????
+                    # 用 None 作为结束信号，通知当前 worker 退出。
                     if item is None:
                         return
                     await process_detail(item)
                 finally:
                     detail_queue.task_done()
 
-        detail_workers = [asyncio.create_task(detail_worker()) for _ in range(site.limits.max_concurrency)]
+        detail_workers = [_spawn_background_task(detail_worker()) for _ in range(site.limits.max_concurrency)]
 
         await asyncio.gather(*(list_worker(task) for task in request_tasks))
         for _ in range(site.limits.max_concurrency):

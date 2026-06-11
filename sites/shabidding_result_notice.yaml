@@ -79,7 +79,6 @@ classification:
 
 area_extraction:
   enabled: true
-  fixed_value: ""
   use_title_first: true
 
 output:

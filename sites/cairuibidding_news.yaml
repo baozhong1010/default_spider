@@ -1,8 +1,8 @@
-id: shabidding_project_notice
+id: cairuibidding_news
 enabled: true
-name: 上航招标网-项目公告
+name: 上海财瑞招投标平台-招标信息
 entry_urls:
-  - https://www.shabidding.com/ekp/resource/news/sys_news_main/sysNewsMain.do?method=getNotice&type=1&rowsize=1000&templateId=13f89f0aecc9570a269328c4ea8b510d&showNotice=all&seacrhVal=
+  - https://www.cairuibidding.com.cn/CrZtb/portalweb/news
 
 schedule:
   enabled: true
@@ -13,12 +13,10 @@ limits:
   request_interval_seconds: 0.2
 
 request:
-  method: POST
+  method: GET
   headers:
-    Referer: https://www.shabidding.com/shgjzb/pc/secondaryPage/news.html?num=0&type=1&id=13f89f0aecc9570a269328c4ea8b510d
-    Origin: https://www.shabidding.com
-    Accept: application/json, text/javascript, */*; q=0.01
-    X-Requested-With: XMLHttpRequest
+    Referer: https://www.cairuibidding.com.cn/CrZtb/portalweb/news
+    Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8
   params: {}
   timeout_seconds: 30
   retries: 2
@@ -26,10 +24,7 @@ request:
   verify_ssl: true
 
 pagination:
-  mode: url_template
-  start_page: 1
-  end_page: 30
-  url_template: "{base_url}&pageno={page}"
+  mode: none
 
 cookie:
   enabled: false
@@ -42,25 +37,26 @@ dedup:
 list_extraction:
   response_html_selectors: []
   item_selectors:
-    - kind: jsonpath
-      expr: $.data[*]
+    - kind: xpath
+      expr: //div[contains(@class, 'newspset')]/dl[.//h5/a]
   link_selectors:
-    - kind: jsonpath
-      expr: $.fdId
+    - kind: xpath
+      expr: .//h5/a/@href
   title_selectors:
-    - kind: jsonpath
-      expr: $.fdSubject
+    - kind: xpath
+      expr: .//h5/a/text()
   date_selectors:
-    - kind: jsonpath
-      expr: $.publishTime
-  detail_url_template: https://www.shabidding.com/ekp/resource/news/sys_news_main/sysNewsMain.do?method=view&fdId={fdId}
+    - kind: xpath
+      expr: .//time/em/text()
+    - kind: xpath
+      expr: .//time/text()
   min_title_length: 6
   fallback_auto: false
 
 detail_extraction:
   content_selectors:
     - kind: xpath
-      expr: //div[@id="_____rtf__temp_____docContent"]
+      expr: //div[contains(@class, 'notice-content')]
   fallback_auto: false
   fallback_readability: false
   min_content_length: 30
@@ -68,8 +64,8 @@ detail_extraction:
 attachments:
   enabled: true
   selectors:
-    - kind: regex
-      expr: var\s+url\s*=\s*"([^"]*method=download[^"]+)"
+    - kind: xpath
+      expr: //div[contains(@class, 'notice-content')]//a/@href
   allowed_extensions: []
   max_bytes: 52428800
 
@@ -79,6 +75,7 @@ classification:
 
 area_extraction:
   enabled: true
+  fixed_value: 上海
   use_title_first: true
 
 output:

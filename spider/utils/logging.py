@@ -140,6 +140,35 @@ def render_event_message(event, data):
             ),
         )
 
+    if event == "scheduler.job.added":
+        return "%s已加入调度任务，%s" % (
+            site_prefix,
+            _pairs_text(
+                [
+                    ("触发方式", data.get("trigger")),
+                    ("抖动秒数", data.get("jitter_seconds")),
+                ]
+            ),
+        )
+
+    if event == "scheduler.started":
+        return "调度器已启动，%s" % _pairs_text([("任务数", data.get("jobs"))])
+
+    if event == "scheduler.stopped":
+        return "调度器已停止"
+
+    if event == "scheduler.job.start":
+        return "%s开始执行定时任务" % site_prefix
+
+    if event == "scheduler.job.end":
+        return "%s定时任务执行完成" % site_prefix
+
+    if event == "site.job.error":
+        return "%s定时任务执行异常，%s" % (
+            site_prefix,
+            _pairs_text([("错误", data.get("error"))]),
+        )
+
     if event == "list.page.fetch.start":
         return "%s开始抓取列表页，%s" % (
             site_prefix,
@@ -455,6 +484,7 @@ def setup_logging(level=logging.INFO, log_dir=None):
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("httpcore").setLevel(logging.WARNING)
     logging.getLogger("asyncio").setLevel(logging.WARNING)
+    logging.getLogger("apscheduler").setLevel(logging.WARNING)
 
 
 def log_event(logger, level, event, **kwargs):

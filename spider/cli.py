@@ -189,7 +189,7 @@ async def _cmd_schedule(root):
     # type: (str) -> None
     cfg = load_app_config(root)
     engine = SpiderEngine(cfg)
-    scheduler = SpiderScheduler(cfg, engine)
+    scheduler = SpiderScheduler(cfg, engine, config_loader=lambda: load_app_config(root))
     try:
         await scheduler.run_forever()
     finally:

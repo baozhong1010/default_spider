@@ -108,7 +108,7 @@ classification:
 
 area_extraction:
   enabled: true
-  fixed_value: 扬州市
+  fixed_value: 江苏
   use_title_first: true
 
 output:
