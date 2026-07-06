@@ -51,7 +51,7 @@ class AttachmentDownloader(object):
                 url=url,
                 method="GET",
                 headers=request_cfg.headers,
-                timeout_seconds=max(request_cfg.timeout_seconds, 30),
+                timeout_seconds=max(request_cfg.timeout_seconds, 100),
                 retries=request_cfg.retries,
                 retry_backoff_seconds=request_cfg.retry_backoff_seconds,
                 verify_ssl=request_cfg.verify_ssl,
