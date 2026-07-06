@@ -77,6 +77,9 @@ def apply_selector(selector, context, html_text, as_nodes=False):
     else:
         return []
 
+    if not isinstance(values, (list, tuple)):
+        values = [values]
+
     if as_nodes:
         return list(values)
 
