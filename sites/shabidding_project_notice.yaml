@@ -28,7 +28,7 @@ request:
 pagination:
   mode: url_template
   start_page: 1
-  end_page: 30
+  end_page: 2
   url_template: "{base_url}&pageno={page}"
 
 cookie:
