@@ -1,4 +1,4 @@
-﻿# Runtime dependencies for default_spider
+# Runtime dependencies for default_spider
 # Generated from pyproject.toml / setup.py
 
 httpx>=0.22,<0.24; python_version < "3.7"
@@ -16,3 +16,5 @@ pdfminer.six>=20220524,<20240706
 apscheduler>=3.9.1
 typing_extensions>=4.1.1; python_version < "3.8"
 dataclasses>=0.8; python_version < "3.7"
+gmssl>=3.2.2
+pycryptodome>=3.15.0
