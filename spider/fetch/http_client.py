@@ -1,11 +1,18 @@
-﻿import asyncio
+import asyncio
+import http.cookiejar
+import json as _json
 import logging
+import re
+import ssl as _ssl
 import time
+import urllib.error
+import urllib.parse
+import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Union
 
 import chardet
-import httpx
 
 from spider.utils.logging import log_event
 
@@ -22,6 +29,8 @@ class FetchRequest:
     retries: int = 2
     retry_backoff_seconds: float = 0.6
     verify_ssl: bool = False
+    # 可选加解密对象：提供 encrypt(inner)->str 与 decrypt(text)->str
+    crypto: Optional[object] = None
 
 
 @dataclass
@@ -34,22 +43,31 @@ class FetchResponse:
 
 
 class HttpFetcher(object):
+    """基于标准库 urllib 的异步 HTTP 抓取器。
+
+    说明：某些老环境（如 Python 3.6 + OpenSSL 1.0.2）下 httpx/httpcore 的
+    MemoryBIO TLS 握手会失败，而标准库 urllib（wrap_socket）可正常工作。
+    因此这里统一用 urllib 执行同步请求，再放到线程池里保持异步并发语义。
+    """
+
     def __init__(self, user_agent, max_connections, transport=None):
         # type: (str, int, Any) -> None
-        limits = httpx.Limits(max_connections=max_connections, max_keepalive_connections=max_connections)
-        self._client = httpx.AsyncClient(
-            limits=limits,
-            follow_redirects=True,
-            transport=transport,
-            headers={"User-Agent": user_agent},
-        )
+        self.user_agent = user_agent
+        self._executor = ThreadPoolExecutor(max_workers=max(4, int(max_connections)))
+        # CookieJar：自动处理站点会话/反爬 Cookie（如首次 302 下发 CT6T/CT6TS，需带回才能取到 200）
+        self._cookie_jar = http.cookiejar.CookieJar()
         self.logger = logging.getLogger("default_spider.http")
 
     async def close(self):
         # type: () -> None
-        await self._client.aclose()
+        self._executor.shutdown(wait=False)
 
     async def fetch(self, req, cookie=None):
+        # type: (FetchRequest, Optional[str]) -> FetchResponse
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(self._executor, self._fetch_sync, req, cookie)
+
+    def _fetch_sync(self, req, cookie=None):
         # type: (FetchRequest, Optional[str]) -> FetchResponse
         last_error = None  # type: Optional[Exception]
         headers = dict(req.headers or {})
@@ -60,16 +78,7 @@ class HttpFetcher(object):
             attempt_no = attempt + 1
             start = time.time()
             try:
-                response = await self._client.request(
-                    req.method.upper(),
-                    req.url,
-                    headers=headers,
-                    params=req.params,
-                    data=req.data,
-                    json=req.json,
-                    timeout=req.timeout_seconds,
-                )
-                text = self._decode_text(response)
+                response = self._do_fetch(req, headers)
                 cost = round(time.time() - start, 3)
                 log_event(
                     self.logger,
@@ -83,13 +92,7 @@ class HttpFetcher(object):
                     duration_seconds=cost,
                     content_bytes=len(response.content),
                 )
-                return FetchResponse(
-                    status_code=response.status_code,
-                    text=text,
-                    content=response.content,
-                    headers={k: v for k, v in response.headers.items()},
-                    url=str(response.url),
-                )
+                return response
             except Exception as exc:
                 last_error = exc
                 cost = round(time.time() - start, 3)
@@ -108,21 +111,98 @@ class HttpFetcher(object):
                 )
                 if attempt >= req.retries:
                     break
-                await asyncio.sleep(req.retry_backoff_seconds * (attempt + 1))
+                time.sleep(req.retry_backoff_seconds * (attempt + 1))
 
         if last_error is None:
             raise RuntimeError("fetch failed without explicit exception")
         raise last_error
 
-    @staticmethod
-    def _decode_text(response):
-        # type: (httpx.Response) -> str
-        if response.encoding:
-            return response.text
-        if not response.content:
-            return ""
-        guess = chardet.detect(response.content).get("encoding") or "utf-8"
+    def _do_fetch(self, req, headers):
+        # type: (FetchRequest, Dict[str, str]) -> FetchResponse
+        url = req.url
+        if req.params:
+            sep = "&" if "?" in url else "?"
+            url = url + sep + urllib.parse.urlencode(req.params)
+
+        body = None  # type: Optional[bytes]
+        headers.setdefault("User-Agent", self.user_agent)
+
+        if req.crypto is not None and req.json is not None:
+            body = req.crypto.encrypt(req.json).encode("utf-8")
+            headers.setdefault("encrypt", "1")
+            headers.setdefault("Content-Type", "application/json; charset=UTF-8")
+        elif req.json is not None:
+            body = _json.dumps(req.json, ensure_ascii=False).encode("utf-8")
+            headers.setdefault("Content-Type", "application/json; charset=UTF-8")
+        elif req.data is not None:
+            if isinstance(req.data, dict):
+                body = urllib.parse.urlencode(req.data).encode("utf-8")
+                headers.setdefault("Content-Type", "application/x-www-form-urlencoded")
+            elif isinstance(req.data, str):
+                body = req.data.encode("utf-8")
+            else:
+                body = req.data
+
+        method = req.method.upper()
+        if method != "GET" and body is None:
+            body = b""
+
+        ssl_context = None
+        if not req.verify_ssl:
+            ssl_context = _ssl.create_default_context()
+            ssl_context.check_hostname = False
+            ssl_context.verify_mode = _ssl.CERT_NONE
+
+        request = urllib.request.Request(url, data=body, headers=headers, method=method)
+        handlers = [urllib.request.HTTPCookieProcessor(self._cookie_jar)]
+        if ssl_context is not None:
+            handlers.append(urllib.request.HTTPSHandler(context=ssl_context))
+        opener = urllib.request.build_opener(*handlers)
         try:
-            return response.content.decode(guess, errors="ignore")
+            resp = opener.open(request, timeout=req.timeout_seconds)
+        except urllib.error.HTTPError as exc:
+            resp = exc
+
+        status_code = resp.getcode()
+        content = resp.read()
+        content_type = ""
+        raw_headers = {}
+        try:
+            raw_headers = {k: v for k, v in resp.headers.items()}
+            content_type = raw_headers.get("Content-Type", "")
         except Exception:
-            return response.content.decode("utf-8", errors="ignore")
+            pass
+
+        text = self._decode_bytes(content, content_type)
+        if req.crypto is not None and req.json is not None:
+            text = req.crypto.decrypt(text)
+
+        return FetchResponse(
+            status_code=status_code,
+            text=text,
+            content=content,
+            headers=raw_headers,
+            url=resp.geturl(),
+        )
+
+    @staticmethod
+    def _decode_bytes(content, content_type=""):
+        # type: (bytes, str) -> str
+        if not content:
+            return ""
+
+        charset = None
+        match = re.search(r"charset\s*=\s*[\"']?([\w-]+)", content_type or "", flags=re.I)
+        if match:
+            charset = match.group(1)
+        if charset:
+            try:
+                return content.decode(charset, errors="ignore")
+            except Exception:
+                pass
+
+        guess = chardet.detect(content).get("encoding") or "utf-8"
+        try:
+            return content.decode(guess, errors="ignore")
+        except Exception:
+            return content.decode("utf-8", errors="ignore")

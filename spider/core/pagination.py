@@ -1,4 +1,5 @@
-﻿from dataclasses import dataclass
+import json as _json
+from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Union
 
 from spider.config.models import PaginationConfig, RequestConfig
@@ -41,10 +42,21 @@ def build_list_request_tasks(entry_urls, request_cfg, pagination_cfg):
                 task_url = url
             elif mode == "url_template":
                 params = dict(request_cfg.params)
-                task_url = pagination_cfg.url_template.format(page=page, base_url=url)
+                task_url = pagination_cfg.url_template.format(page=page, page_index=page - 1, base_url=url)
+            elif mode == "json_template":
+                params = dict(request_cfg.params)
+                task_url = url
             else:
                 params = dict(request_cfg.params)
                 task_url = url
+
+            task_json = request_cfg.json_body
+            if mode == "json_template":
+                rendered = pagination_cfg.json_template
+                rendered = rendered.replace("{page_index}", str(page - 1))
+                rendered = rendered.replace("{page}", str(page))
+                rendered = rendered.replace("{base_url}", url)
+                task_json = _json.loads(rendered)
 
             tasks.append(
                 RequestTask(
@@ -53,7 +65,7 @@ def build_list_request_tasks(entry_urls, request_cfg, pagination_cfg):
                     headers=dict(request_cfg.headers),
                     params=params,
                     data=request_cfg.data,
-                    json=request_cfg.json_body,
+                    json=task_json,
                 )
             )
     return tasks

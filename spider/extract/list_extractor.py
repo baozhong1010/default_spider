@@ -1,4 +1,4 @@
-﻿import re
+import re
 from dataclasses import dataclass
 from typing import Any, Dict, List
 
@@ -15,6 +15,7 @@ class ListItem:
     url: str
     date: str
     source_url: str = ""
+    raw_url: str = ""
 
 
 class ListExtractor(object):
@@ -84,13 +85,14 @@ class ListExtractor(object):
 
             title = normalize_space(title)
             link = normalize_space(link)
+            raw_link = link
             if self.cfg.detail_url_template and link:
                 link = self._format_detail_url(node, link)
             if len(title) < self.cfg.min_title_length or not link:
                 continue
             if link.lower().startswith("javascript"):
                 continue
-            result.append(ListItem(title=title, url=resolve_url(base_url, link), date=normalize_space(date), source_url=""))
+            result.append(ListItem(title=title, url=resolve_url(base_url, link), raw_url=raw_link, date=normalize_space(date), source_url=""))
         return result
 
     def _format_detail_url(self, node, value):
@@ -101,6 +103,12 @@ class ListExtractor(object):
         fields = {}  # type: Dict[str, Any]
         if isinstance(node, dict):
             fields.update(node)
+            categorynum = str(node.get("categorynum", "") or "")
+            if categorynum:
+                fields.setdefault("categorynum6", categorynum[:6])
+            postdate = str(node.get("postdate", "") or "")
+            if postdate:
+                fields.setdefault("postdate_nodash", postdate.replace("-", ""))
         fields.setdefault("value", value)
         fields.setdefault("fdId", value)
         try:
@@ -118,5 +126,5 @@ class ListExtractor(object):
             title = normalize_space(anchor.get("title") or "".join(anchor.xpath(".//text()")))
             if len(re.findall(r"[\u4e00-\u9fffA-Za-z0-9]", title)) < self.cfg.min_title_length:
                 continue
-            result.append(ListItem(title=title, url=resolve_url(base_url, href), date="", source_url=""))
+            result.append(ListItem(title=title, url=resolve_url(base_url, href), raw_url=normalize_space(href), date="", source_url=""))
         return result

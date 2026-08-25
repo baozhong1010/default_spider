@@ -1,4 +1,4 @@
-﻿import logging
+import logging
 import os
 import uuid
 from urllib.parse import urlparse
@@ -25,8 +25,9 @@ class AttachmentDownloader(object):
         max_bytes,
         site_id="",
         source_url="",
+        attachment_names=None,
     ):
-        # type: (list, RequestConfig, OutputConfig, str, str, int, str, str) -> list
+        # type: (list, RequestConfig, OutputConfig, str, str, int, str, str, Optional[list]) -> list
         if not attachment_urls:
             return []
 
@@ -45,8 +46,11 @@ class AttachmentDownloader(object):
         )
 
         output_files = []
-        for url in attachment_urls:
-            filename = self._build_filename(url)
+        for i, url in enumerate(attachment_urls):
+            name = ""
+            if attachment_names and i < len(attachment_names):
+                name = attachment_names[i] or ""
+            filename = self._build_filename(url, name)
             fetch_req = FetchRequest(
                 url=url,
                 method="GET",
@@ -103,10 +107,13 @@ class AttachmentDownloader(object):
         return output_files
 
     @staticmethod
-    def _build_filename(url):
-        # type: (str) -> str
-        parsed = urlparse(url)
-        base = os.path.basename(parsed.path) or "附件"
-        base = sanitize_filename(base)
+    def _build_filename(url, name=""):
+        # type: (str, str) -> str
+        if name:
+            base = sanitize_filename(name)
+        else:
+            parsed = urlparse(url)
+            base = os.path.basename(parsed.path) or "附件"
+            base = sanitize_filename(base)
         uid = str(uuid.uuid4()).replace("-", "")[:8]
         return "%s_%s" % (uid, base)

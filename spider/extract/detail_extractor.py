@@ -1,4 +1,4 @@
-﻿import html as html_lib
+import html as html_lib
 import re
 from dataclasses import dataclass, field
 from typing import List, Set
@@ -15,6 +15,7 @@ from spider.utils.helpers import normalize_space, resolve_url
 class DetailExtractResult:
     content: str
     attachment_urls: List[str] = field(default_factory=list)
+    attachment_names: List[str] = field(default_factory=list)
 
 
 class DetailExtractor(object):
@@ -23,21 +24,40 @@ class DetailExtractor(object):
         self.detail_cfg = detail_cfg
         self.attachment_cfg = attachment_cfg
 
-    def extract(self, html_text, base_url):
+    def extract(self, raw_text, base_url):
         # type: (str, str) -> DetailExtractResult
-        tree = html_tree(html_text)
+        content_html = self._resolve_content_html(raw_text)
+        tree = html_tree(content_html)
         if tree is None:
             return DetailExtractResult(content="", attachment_urls=[])
 
-        content = self._extract_content_by_rules(tree, html_text)
+        content = self._extract_content_by_rules(tree, content_html)
         if (not self.to_plain_text(content) or len(self.to_plain_text(content)) < self.detail_cfg.min_content_length) and self.detail_cfg.fallback_auto:
             content = self._extract_content_by_auto(tree)
         if (not self.to_plain_text(content) or len(self.to_plain_text(content)) < self.detail_cfg.min_content_length) and self.detail_cfg.fallback_readability:
-            content = self._extract_with_readability(html_text)
+            content = self._extract_with_readability(content_html)
 
         content = content.strip()
-        attachment_urls = self._extract_attachments(tree, html_text, base_url)
-        return DetailExtractResult(content=content, attachment_urls=attachment_urls)
+        attachment_urls, attachment_names = self._extract_attachments(tree, raw_text, base_url)
+        return DetailExtractResult(content=content, attachment_urls=attachment_urls, attachment_names=attachment_names)
+
+    def _resolve_content_html(self, raw_text):
+        # type: (str) -> str
+        if not self.detail_cfg.response_html_selectors:
+            return raw_text
+
+        root = html_tree(raw_text)
+        for selector in self.detail_cfg.response_html_selectors:
+            values = apply_selector(selector=selector, context=root, html_text=raw_text, as_nodes=True)
+            if not values:
+                continue
+            first = values[0]
+            if isinstance(first, str):
+                return first
+            if isinstance(first, etree._Element):
+                return etree.tostring(first, encoding="unicode", method="html")
+            return str(first)
+        return raw_text
 
     @staticmethod
     def to_plain_text(content):
@@ -88,9 +108,9 @@ class DetailExtractor(object):
             return ""
 
     def _extract_attachments(self, tree, html_text, base_url):
-        # type: (etree._Element, str, str) -> List[str]
+        # type: (etree._Element, str, str) -> tuple
         if not self.attachment_cfg.enabled:
-            return []
+            return [], []
 
         urls = []  # type: List[str]
         if self.attachment_cfg.selectors:
@@ -102,9 +122,15 @@ class DetailExtractor(object):
             urls.extend(tree.xpath("//iframe/@src"))
             urls.extend(tree.xpath("//embed/@src"))
 
+        names = []  # type: List[str]
+        for selector in self.attachment_cfg.filename_selectors:
+            values = apply_selector(selector=selector, context=tree, html_text=html_text)
+            names.extend(values)
+
         output = []  # type: List[str]
+        output_names = []  # type: List[str]
         seen = set()  # type: Set[str]
-        for raw in urls:
+        for i, raw in enumerate(urls):
             if not raw:
                 continue
             normalized_raw = normalize_space(str(raw)).replace("\\/", "/")
@@ -120,4 +146,5 @@ class DetailExtractor(object):
                 continue
             seen.add(url)
             output.append(url)
-        return output
+            output_names.append(normalize_space(names[i]) if i < len(names) else "")
+        return output, output_names

@@ -1,4 +1,4 @@
-﻿import asyncio
+import asyncio
 import datetime as dt
 import hashlib
 import json
@@ -10,6 +10,7 @@ from typing import Dict, List, Optional
 from spider.config.models import AppConfig, SiteConfig
 from spider.core.pagination import build_list_request_tasks
 from spider.core.state import CircuitState, SiteRateLimiter
+from spider.crypto import create_crypto
 from spider.extract.attachment_downloader import AttachmentDownloader
 from spider.extract.detail_extractor import DetailExtractor
 from spider.extract.list_extractor import ListExtractor, ListItem
@@ -109,6 +110,7 @@ class SpiderEngine(object):
             return metrics
 
         cookie = await self.cookie_provider.get_cookie(site.cookie)
+        crypto = create_crypto(site.crypto)
         list_extractor = ListExtractor(site.list_extraction)
         detail_extractor = DetailExtractor(site.detail_extraction, site.attachments)
         pdf_detector = PdfBodyDetector()
@@ -156,6 +158,7 @@ class SpiderEngine(object):
                 retries=site.request.retries,
                 retry_backoff_seconds=site.request.retry_backoff_seconds,
                 verify_ssl=site.request.verify_ssl,
+                crypto=crypto,
             )
             try:
                 resp = await self.fetcher.fetch(req, cookie=cookie)
@@ -264,14 +267,26 @@ class SpiderEngine(object):
             )
             await limiter.wait_turn()
 
+            detail_url = item.url
+            detail_method = "GET"
+            detail_json = None
+            if site.detail_request.body_template:
+                detail_url = site.detail_request.url or (site.entry_urls[0] if site.entry_urls else item.url)
+                detail_method = site.detail_request.method or "POST"
+                raw_link = getattr(item, "raw_url", "") or item.url
+                body_str = site.detail_request.body_template.replace("{link}", raw_link).replace("{title}", item.title)
+                detail_json = json.loads(body_str)
+
             req = FetchRequest(
-                url=item.url,
-                method="GET",
+                url=detail_url,
+                method=detail_method,
                 headers=site.request.headers,
+                json=detail_json,
                 timeout_seconds=site.request.timeout_seconds,
                 retries=site.request.retries,
                 retry_backoff_seconds=site.request.retry_backoff_seconds,
                 verify_ssl=site.request.verify_ssl,
+                crypto=crypto,
             )
 
             try:
@@ -353,6 +368,7 @@ class SpiderEngine(object):
 
             pdf_detection = pdf_detector.detect(resp.url, headers=resp.headers, html_text=resp.text)
             attachment_urls = []
+            attachment_names = []
             pdf_content_used = False
 
             if pdf_detection.is_pdf_body and pdf_detection.pdf_url == resp.url:
@@ -380,6 +396,7 @@ class SpiderEngine(object):
                 parsed = detail_extractor.extract(resp.text, resp.url)
                 content_html = parsed.content
                 attachment_urls = list(parsed.attachment_urls)
+                attachment_names = list(parsed.attachment_names)
                 content_text = detail_extractor.to_plain_text(content_html)
 
                 if len(content_text) < site.detail_extraction.min_content_length and pdf_detection.is_pdf_body and pdf_detection.pdf_url:
@@ -451,9 +468,17 @@ class SpiderEngine(object):
                         )
                         return
 
-                    attachment_urls = [
-                        url for url in attachment_urls if url not in set(pdf_detection.matched_urls + [pdf_detection.pdf_url])
-                    ]
+                    excluded = set(pdf_detection.matched_urls + [pdf_detection.pdf_url])
+                    filtered_urls = []
+                    filtered_names = []
+                    for idx, url in enumerate(attachment_urls):
+                        if url in excluded:
+                            continue
+                        filtered_urls.append(url)
+                        if idx < len(attachment_names):
+                            filtered_names.append(attachment_names[idx])
+                    attachment_urls = filtered_urls
+                    attachment_names = filtered_names
 
             content_text = detail_extractor.to_plain_text(content_html)
             content_source = "pdf" if pdf_content_used else "html"
@@ -517,6 +542,7 @@ class SpiderEngine(object):
                 max_bytes=site.attachments.max_bytes,
                 site_id=site.id,
                 source_url=item.url,
+                attachment_names=attachment_names,
             )
 
             payload = {

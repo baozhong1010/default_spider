@@ -1,4 +1,4 @@
-﻿from pathlib import Path
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
 try:
@@ -57,24 +57,47 @@ class RequestConfig(BaseModel):
 
 
 class PaginationConfig(BaseModel):
-    mode: Literal["none", "page_param", "url_template"] = "none"
+    mode: Literal["none", "page_param", "url_template", "json_template"] = "none"
     start_page: int = 1
     end_page: int = 1
     page_param: str = "page"
     url_template: Optional[str] = None
+    json_template: Optional[str] = None
 
     @root_validator(skip_on_failure=True)
     def validate_pagination(cls, values):
         mode = values.get("mode")
         url_template = values.get("url_template")
+        json_template = values.get("json_template")
         start_page = values.get("start_page")
         end_page = values.get("end_page")
 
         if mode == "url_template" and not url_template:
             raise ValueError("url_template is required when mode=url_template")
+        if mode == "json_template" and not json_template:
+            raise ValueError("json_template is required when mode=json_template")
         if end_page < start_page:
             raise ValueError("end_page must be >= start_page")
         return values
+
+
+class CryptoConfig(BaseModel):
+    enabled: bool = False
+    module: str = "epoint"
+    public_key: str = ""
+    aes_key: str = ""
+    aes_iv: str = ""
+    token: str = "Epoint_WebSerivce_**##0601"
+    sm2_mode: int = 0
+
+
+class DetailRequestConfig(BaseModel):
+    # 详情页请求方式。默认 GET；加密接口型站点可配置为 POST + body_template。
+    method: str = "GET"
+    # 详情接口地址；为空时回退到 entry_urls[0]。
+    url: Optional[str] = None
+    # 内层请求体模板，支持 {link}（列表项的详情链接，即 infoID）与 {title} 占位符。
+    body_template: Optional[str] = None
 
 
 class ScheduleConfig(BaseModel):
@@ -129,6 +152,8 @@ class ListExtractionConfig(BaseModel):
 
 
 class DetailExtractionConfig(BaseModel):
+    # 若详情响应是 JSON，且真正 HTML 正文在某个字段里，用这个先提取（例如 $.custom.custom.infoContent）
+    response_html_selectors: List[Selector] = Field(default_factory=list)
     content_selectors: List[Selector] = Field(default_factory=list)
     fallback_auto: bool = True
     fallback_readability: bool = True
@@ -138,6 +163,8 @@ class DetailExtractionConfig(BaseModel):
 class AttachmentConfig(BaseModel):
     enabled: bool = True
     selectors: List[Selector] = Field(default_factory=list)
+    # 附件文件名提取规则（与 selectors 按位置对齐）；为空时回退到 URL 路径 basename
+    filename_selectors: List[Selector] = Field(default_factory=list)
     allowed_extensions: List[str] = Field(
         default_factory=lambda: [".pdf", ".doc", ".docx", ".xls", ".xlsx", ".zip", ".rar", ".txt"]
     )
@@ -181,6 +208,8 @@ class SiteConfig(BaseModel):
     limits: SiteLimits = Field(default_factory=SiteLimits)
     request: RequestConfig = Field(default_factory=RequestConfig)
     pagination: PaginationConfig = Field(default_factory=PaginationConfig)
+    crypto: CryptoConfig = Field(default_factory=CryptoConfig)
+    detail_request: DetailRequestConfig = Field(default_factory=DetailRequestConfig)
     cookie: CookieConfig = Field(default_factory=CookieConfig)
     dedup: DedupConfig = Field(default_factory=DedupConfig)
     list_extraction: ListExtractionConfig = Field(default_factory=ListExtractionConfig)

@@ -1,0 +1,883 @@
+# 苏州工业园区公共资源交易中心（新点 Epoint 框架，SM2/AES 加密接口）
+# 数据接口：POST https://one.sipac.gov.cn/szgyyqwsdtfr/rest/qyxy/toapimanager
+# 每个站点配置对应一个交易信息子栏目（cateNum）。
+
+- id: sipac_ggzy_gc_zbgg
+  enabled: true
+  name: 苏州工业园区公共资源交易-工程建设-招标公告
+  entry_urls:
+    - https://one.sipac.gov.cn/szgyyqwsdtfr/rest/qyxy/toapimanager
+
+  schedule:
+    enabled: true
+    interval_seconds: 3600
+
+  limits:
+    max_concurrency: 2
+    request_interval_seconds: 0.5
+
+  request:
+    method: POST
+    headers:
+      Referer: https://one.sipac.gov.cn/szgyyqwsdtfr/szyqzwdt/html/pages/publicresource/tradelist.html
+      Accept: application/json, text/javascript, */*; q=0.01
+      X-Requested-With: XMLHttpRequest
+    params: {}
+    timeout_seconds: 40
+    retries: 2
+    retry_backoff_seconds: 0.8
+    verify_ssl: true
+
+  pagination:
+    mode: json_template
+    start_page: 1
+    end_page: 3
+    json_template: '{"resturl":"getInfoListNew","restparams":{"infoType":"0","siteguid":"7eb5f7f1-9041-43ad-8e13-8fcb82ea831a","cateNum":"001001","width":"636","pageSize":"10","endtime":"","starttime":"","title":"","currentPageIndex":{page_index},"height":"379"}}'
+
+  crypto:
+    enabled: true
+    module: epoint
+    public_key: "04CE47B87597B6F8136637E0CA5E4C823C5AD935500ECF67BBEC1597D49A9DB34D346AB11EFE65D51BD4EDC3C12E8F8FA0B6C612FE802FF279655FBF00887CB50D"
+    aes_key: "qnbpwgttcfv96fgw"
+    aes_iv: "5141928399038306"
+    token: "Epoint_WebSerivce_**##0601"
+    sm2_mode: 0
+
+  detail_request:
+    method: POST
+    url: "https://one.sipac.gov.cn/szgyyqwsdtfr/rest/qyxy/toapimanager"
+    body_template: '{"resturl":"getInfoDetailNew","restparams":{"infoID":"{link}","siteguid":"7eb5f7f1-9041-43ad-8e13-8fcb82ea831a"}}'
+
+  cookie:
+    enabled: false
+
+  dedup:
+    redis_hash_key: zhaobiao:domian:linkqc
+    ttl_days: 30
+    prune_probability: 0.01
+
+  list_extraction:
+    response_html_selectors: []
+    item_selectors:
+      - kind: jsonpath
+        expr: $.custom.infoList[*]
+    link_selectors:
+      - kind: jsonpath
+        expr: $.infoID
+    title_selectors:
+      - kind: jsonpath
+        expr: $.title
+    date_selectors:
+      - kind: jsonpath
+        expr: $.infoDate
+    detail_url_template: "https://one.sipac.gov.cn/szgyyqwsdtfr/szyqzwdt/html/pages/publicresource/detail.html?infoID={value}"
+    min_title_length: 6
+    fallback_auto: false
+
+  detail_extraction:
+    response_html_selectors:
+      - kind: jsonpath
+        expr: $.custom.custom.infoContent
+    content_selectors:
+      - kind: xpath
+        expr: //body
+    fallback_auto: true
+    fallback_readability: true
+    min_content_length: 30
+
+  attachments:
+    enabled: true
+    selectors:
+      - kind: jsonpath
+        expr: $.custom.custom.attachFiles[*].attUrl
+    filename_selectors:
+      - kind: jsonpath
+        expr: $.custom.custom.attachFiles[*].attFileName
+    allowed_extensions: []
+    max_bytes: 52428800
+
+  classification:
+    default_type: zhaobiao
+    zhongbiao_keywords: []
+
+  area_extraction:
+    enabled: true
+    fixed_value: 江苏
+    use_title_first: true
+
+  output:
+    enabled: true
+    queue_zhaobiao: zhaobiao:result:zhaobiao
+    queue_zhongbiao: zhaobiao:result:zhongbiao
+    attachment_dir_zhaobiao: /root/pachong/zhaobiao/data/附件
+    attachment_dir_zhongbiao: /root/pachong/zhaobiao/data_zb/附件
+
+- id: sipac_ggzy_gc_zbhxr
+  enabled: true
+  name: 苏州工业园区公共资源交易-工程建设-中标候选人公示
+  entry_urls:
+    - https://one.sipac.gov.cn/szgyyqwsdtfr/rest/qyxy/toapimanager
+
+  schedule:
+    enabled: true
+    interval_seconds: 3600
+
+  limits:
+    max_concurrency: 2
+    request_interval_seconds: 0.5
+
+  request:
+    method: POST
+    headers:
+      Referer: https://one.sipac.gov.cn/szgyyqwsdtfr/szyqzwdt/html/pages/publicresource/tradelist.html
+      Accept: application/json, text/javascript, */*; q=0.01
+      X-Requested-With: XMLHttpRequest
+    params: {}
+    timeout_seconds: 40
+    retries: 2
+    retry_backoff_seconds: 0.8
+    verify_ssl: true
+
+  pagination:
+    mode: json_template
+    start_page: 1
+    end_page: 3
+    json_template: '{"resturl":"getInfoListNew","restparams":{"infoType":"0","siteguid":"7eb5f7f1-9041-43ad-8e13-8fcb82ea831a","cateNum":"001005","width":"636","pageSize":"10","endtime":"","starttime":"","title":"","currentPageIndex":{page_index},"height":"379"}}'
+
+  crypto:
+    enabled: true
+    module: epoint
+    public_key: "04CE47B87597B6F8136637E0CA5E4C823C5AD935500ECF67BBEC1597D49A9DB34D346AB11EFE65D51BD4EDC3C12E8F8FA0B6C612FE802FF279655FBF00887CB50D"
+    aes_key: "qnbpwgttcfv96fgw"
+    aes_iv: "5141928399038306"
+    token: "Epoint_WebSerivce_**##0601"
+    sm2_mode: 0
+
+  detail_request:
+    method: POST
+    url: "https://one.sipac.gov.cn/szgyyqwsdtfr/rest/qyxy/toapimanager"
+    body_template: '{"resturl":"getInfoDetailNew","restparams":{"infoID":"{link}","siteguid":"7eb5f7f1-9041-43ad-8e13-8fcb82ea831a"}}'
+
+  cookie:
+    enabled: false
+
+  dedup:
+    redis_hash_key: zhaobiao:domian:linkqc
+    ttl_days: 30
+    prune_probability: 0.01
+
+  list_extraction:
+    response_html_selectors: []
+    item_selectors:
+      - kind: jsonpath
+        expr: $.custom.infoList[*]
+    link_selectors:
+      - kind: jsonpath
+        expr: $.infoID
+    title_selectors:
+      - kind: jsonpath
+        expr: $.title
+    date_selectors:
+      - kind: jsonpath
+        expr: $.infoDate
+    detail_url_template: "https://one.sipac.gov.cn/szgyyqwsdtfr/szyqzwdt/html/pages/publicresource/detail.html?infoID={value}"
+    min_title_length: 6
+    fallback_auto: false
+
+  detail_extraction:
+    response_html_selectors:
+      - kind: jsonpath
+        expr: $.custom.custom.infoContent
+    content_selectors:
+      - kind: xpath
+        expr: //body
+    fallback_auto: true
+    fallback_readability: true
+    min_content_length: 30
+
+  attachments:
+    enabled: true
+    selectors:
+      - kind: jsonpath
+        expr: $.custom.custom.attachFiles[*].attUrl
+    filename_selectors:
+      - kind: jsonpath
+        expr: $.custom.custom.attachFiles[*].attFileName
+    allowed_extensions: []
+    max_bytes: 52428800
+
+  classification:
+    default_type: zhongbiao
+    zhongbiao_keywords: []
+
+  area_extraction:
+    enabled: true
+    fixed_value: 江苏
+    use_title_first: true
+
+  output:
+    enabled: true
+    queue_zhaobiao: zhaobiao:result:zhaobiao
+    queue_zhongbiao: zhaobiao:result:zhongbiao
+    attachment_dir_zhaobiao: /root/pachong/zhaobiao/data/附件
+    attachment_dir_zhongbiao: /root/pachong/zhaobiao/data_zb/附件
+
+- id: sipac_ggzy_gc_zbgs
+  enabled: true
+  name: 苏州工业园区公共资源交易-工程建设-中标公告
+  entry_urls:
+    - https://one.sipac.gov.cn/szgyyqwsdtfr/rest/qyxy/toapimanager
+
+  schedule:
+    enabled: true
+    interval_seconds: 3600
+
+  limits:
+    max_concurrency: 2
+    request_interval_seconds: 0.5
+
+  request:
+    method: POST
+    headers:
+      Referer: https://one.sipac.gov.cn/szgyyqwsdtfr/szyqzwdt/html/pages/publicresource/tradelist.html
+      Accept: application/json, text/javascript, */*; q=0.01
+      X-Requested-With: XMLHttpRequest
+    params: {}
+    timeout_seconds: 40
+    retries: 2
+    retry_backoff_seconds: 0.8
+    verify_ssl: true
+
+  pagination:
+    mode: json_template
+    start_page: 1
+    end_page: 3
+    json_template: '{"resturl":"getInfoListNew","restparams":{"infoType":"0","siteguid":"7eb5f7f1-9041-43ad-8e13-8fcb82ea831a","cateNum":"001006","width":"636","pageSize":"10","endtime":"","starttime":"","title":"","currentPageIndex":{page_index},"height":"379"}}'
+
+  crypto:
+    enabled: true
+    module: epoint
+    public_key: "04CE47B87597B6F8136637E0CA5E4C823C5AD935500ECF67BBEC1597D49A9DB34D346AB11EFE65D51BD4EDC3C12E8F8FA0B6C612FE802FF279655FBF00887CB50D"
+    aes_key: "qnbpwgttcfv96fgw"
+    aes_iv: "5141928399038306"
+    token: "Epoint_WebSerivce_**##0601"
+    sm2_mode: 0
+
+  detail_request:
+    method: POST
+    url: "https://one.sipac.gov.cn/szgyyqwsdtfr/rest/qyxy/toapimanager"
+    body_template: '{"resturl":"getInfoDetailNew","restparams":{"infoID":"{link}","siteguid":"7eb5f7f1-9041-43ad-8e13-8fcb82ea831a"}}'
+
+  cookie:
+    enabled: false
+
+  dedup:
+    redis_hash_key: zhaobiao:domian:linkqc
+    ttl_days: 30
+    prune_probability: 0.01
+
+  list_extraction:
+    response_html_selectors: []
+    item_selectors:
+      - kind: jsonpath
+        expr: $.custom.infoList[*]
+    link_selectors:
+      - kind: jsonpath
+        expr: $.infoID
+    title_selectors:
+      - kind: jsonpath
+        expr: $.title
+    date_selectors:
+      - kind: jsonpath
+        expr: $.infoDate
+    detail_url_template: "https://one.sipac.gov.cn/szgyyqwsdtfr/szyqzwdt/html/pages/publicresource/detail.html?infoID={value}"
+    min_title_length: 6
+    fallback_auto: false
+
+  detail_extraction:
+    response_html_selectors:
+      - kind: jsonpath
+        expr: $.custom.custom.infoContent
+    content_selectors:
+      - kind: xpath
+        expr: //body
+    fallback_auto: true
+    fallback_readability: true
+    min_content_length: 30
+
+  attachments:
+    enabled: true
+    selectors:
+      - kind: jsonpath
+        expr: $.custom.custom.attachFiles[*].attUrl
+    filename_selectors:
+      - kind: jsonpath
+        expr: $.custom.custom.attachFiles[*].attFileName
+    allowed_extensions: []
+    max_bytes: 52428800
+
+  classification:
+    default_type: zhongbiao
+    zhongbiao_keywords: []
+
+  area_extraction:
+    enabled: true
+    fixed_value: 江苏
+    use_title_first: true
+
+  output:
+    enabled: true
+    queue_zhaobiao: zhaobiao:result:zhaobiao
+    queue_zhongbiao: zhaobiao:result:zhongbiao
+    attachment_dir_zhaobiao: /root/pachong/zhaobiao/data/附件
+    attachment_dir_zhongbiao: /root/pachong/zhaobiao/data_zb/附件
+
+- id: sipac_ggzy_gq_cggg
+  enabled: true
+  name: 苏州工业园区公共资源交易-国有集体企业采购-采购公告
+  entry_urls:
+    - https://one.sipac.gov.cn/szgyyqwsdtfr/rest/qyxy/toapimanager
+
+  schedule:
+    enabled: true
+    interval_seconds: 3600
+
+  limits:
+    max_concurrency: 2
+    request_interval_seconds: 0.5
+
+  request:
+    method: POST
+    headers:
+      Referer: https://one.sipac.gov.cn/szgyyqwsdtfr/szyqzwdt/html/pages/publicresource/tradelist.html
+      Accept: application/json, text/javascript, */*; q=0.01
+      X-Requested-With: XMLHttpRequest
+    params: {}
+    timeout_seconds: 40
+    retries: 2
+    retry_backoff_seconds: 0.8
+    verify_ssl: true
+
+  pagination:
+    mode: json_template
+    start_page: 1
+    end_page: 3
+    json_template: '{"resturl":"getInfoListNew","restparams":{"infoType":"0","siteguid":"7eb5f7f1-9041-43ad-8e13-8fcb82ea831a","cateNum":"003001","width":"636","pageSize":"10","endtime":"","starttime":"","title":"","currentPageIndex":{page_index},"height":"379"}}'
+
+  crypto:
+    enabled: true
+    module: epoint
+    public_key: "04CE47B87597B6F8136637E0CA5E4C823C5AD935500ECF67BBEC1597D49A9DB34D346AB11EFE65D51BD4EDC3C12E8F8FA0B6C612FE802FF279655FBF00887CB50D"
+    aes_key: "qnbpwgttcfv96fgw"
+    aes_iv: "5141928399038306"
+    token: "Epoint_WebSerivce_**##0601"
+    sm2_mode: 0
+
+  detail_request:
+    method: POST
+    url: "https://one.sipac.gov.cn/szgyyqwsdtfr/rest/qyxy/toapimanager"
+    body_template: '{"resturl":"getInfoDetailNew","restparams":{"infoID":"{link}","siteguid":"7eb5f7f1-9041-43ad-8e13-8fcb82ea831a"}}'
+
+  cookie:
+    enabled: false
+
+  dedup:
+    redis_hash_key: zhaobiao:domian:linkqc
+    ttl_days: 30
+    prune_probability: 0.01
+
+  list_extraction:
+    response_html_selectors: []
+    item_selectors:
+      - kind: jsonpath
+        expr: $.custom.infoList[*]
+    link_selectors:
+      - kind: jsonpath
+        expr: $.infoID
+    title_selectors:
+      - kind: jsonpath
+        expr: $.title
+    date_selectors:
+      - kind: jsonpath
+        expr: $.infoDate
+    detail_url_template: "https://one.sipac.gov.cn/szgyyqwsdtfr/szyqzwdt/html/pages/publicresource/detail.html?infoID={value}"
+    min_title_length: 6
+    fallback_auto: false
+
+  detail_extraction:
+    response_html_selectors:
+      - kind: jsonpath
+        expr: $.custom.custom.infoContent
+    content_selectors:
+      - kind: xpath
+        expr: //body
+    fallback_auto: true
+    fallback_readability: true
+    min_content_length: 30
+
+  attachments:
+    enabled: true
+    selectors:
+      - kind: jsonpath
+        expr: $.custom.custom.attachFiles[*].attUrl
+    filename_selectors:
+      - kind: jsonpath
+        expr: $.custom.custom.attachFiles[*].attFileName
+    allowed_extensions: []
+    max_bytes: 52428800
+
+  classification:
+    default_type: zhaobiao
+    zhongbiao_keywords: []
+
+  area_extraction:
+    enabled: true
+    fixed_value: 江苏
+    use_title_first: true
+
+  output:
+    enabled: true
+    queue_zhaobiao: zhaobiao:result:zhaobiao
+    queue_zhongbiao: zhaobiao:result:zhongbiao
+    attachment_dir_zhaobiao: /root/pachong/zhaobiao/data/附件
+    attachment_dir_zhongbiao: /root/pachong/zhaobiao/data_zb/附件
+
+- id: sipac_ggzy_gq_cjjg
+  enabled: true
+  name: 苏州工业园区公共资源交易-国有集体企业采购-采购结果公示
+  entry_urls:
+    - https://one.sipac.gov.cn/szgyyqwsdtfr/rest/qyxy/toapimanager
+
+  schedule:
+    enabled: true
+    interval_seconds: 3600
+
+  limits:
+    max_concurrency: 2
+    request_interval_seconds: 0.5
+
+  request:
+    method: POST
+    headers:
+      Referer: https://one.sipac.gov.cn/szgyyqwsdtfr/szyqzwdt/html/pages/publicresource/tradelist.html
+      Accept: application/json, text/javascript, */*; q=0.01
+      X-Requested-With: XMLHttpRequest
+    params: {}
+    timeout_seconds: 40
+    retries: 2
+    retry_backoff_seconds: 0.8
+    verify_ssl: true
+
+  pagination:
+    mode: json_template
+    start_page: 1
+    end_page: 3
+    json_template: '{"resturl":"getInfoListNew","restparams":{"infoType":"0","siteguid":"7eb5f7f1-9041-43ad-8e13-8fcb82ea831a","cateNum":"003004","width":"636","pageSize":"10","endtime":"","starttime":"","title":"","currentPageIndex":{page_index},"height":"379"}}'
+
+  crypto:
+    enabled: true
+    module: epoint
+    public_key: "04CE47B87597B6F8136637E0CA5E4C823C5AD935500ECF67BBEC1597D49A9DB34D346AB11EFE65D51BD4EDC3C12E8F8FA0B6C612FE802FF279655FBF00887CB50D"
+    aes_key: "qnbpwgttcfv96fgw"
+    aes_iv: "5141928399038306"
+    token: "Epoint_WebSerivce_**##0601"
+    sm2_mode: 0
+
+  detail_request:
+    method: POST
+    url: "https://one.sipac.gov.cn/szgyyqwsdtfr/rest/qyxy/toapimanager"
+    body_template: '{"resturl":"getInfoDetailNew","restparams":{"infoID":"{link}","siteguid":"7eb5f7f1-9041-43ad-8e13-8fcb82ea831a"}}'
+
+  cookie:
+    enabled: false
+
+  dedup:
+    redis_hash_key: zhaobiao:domian:linkqc
+    ttl_days: 30
+    prune_probability: 0.01
+
+  list_extraction:
+    response_html_selectors: []
+    item_selectors:
+      - kind: jsonpath
+        expr: $.custom.infoList[*]
+    link_selectors:
+      - kind: jsonpath
+        expr: $.infoID
+    title_selectors:
+      - kind: jsonpath
+        expr: $.title
+    date_selectors:
+      - kind: jsonpath
+        expr: $.infoDate
+    detail_url_template: "https://one.sipac.gov.cn/szgyyqwsdtfr/szyqzwdt/html/pages/publicresource/detail.html?infoID={value}"
+    min_title_length: 6
+    fallback_auto: false
+
+  detail_extraction:
+    response_html_selectors:
+      - kind: jsonpath
+        expr: $.custom.custom.infoContent
+    content_selectors:
+      - kind: xpath
+        expr: //body
+    fallback_auto: true
+    fallback_readability: true
+    min_content_length: 30
+
+  attachments:
+    enabled: true
+    selectors:
+      - kind: jsonpath
+        expr: $.custom.custom.attachFiles[*].attUrl
+    filename_selectors:
+      - kind: jsonpath
+        expr: $.custom.custom.attachFiles[*].attFileName
+    allowed_extensions: []
+    max_bytes: 52428800
+
+  classification:
+    default_type: zhongbiao
+    zhongbiao_keywords: []
+
+  area_extraction:
+    enabled: true
+    fixed_value: 江苏
+    use_title_first: true
+
+  output:
+    enabled: true
+    queue_zhaobiao: zhaobiao:result:zhaobiao
+    queue_zhongbiao: zhaobiao:result:zhongbiao
+    attachment_dir_zhaobiao: /root/pachong/zhaobiao/data/附件
+    attachment_dir_zhongbiao: /root/pachong/zhaobiao/data_zb/附件
+
+- id: sipac_ggzy_td_crgg
+  enabled: true
+  name: 苏州工业园区公共资源交易-土地电力及其他-土地出让公告
+  entry_urls:
+    - https://one.sipac.gov.cn/szgyyqwsdtfr/rest/qyxy/toapimanager
+
+  schedule:
+    enabled: true
+    interval_seconds: 3600
+
+  limits:
+    max_concurrency: 2
+    request_interval_seconds: 0.5
+
+  request:
+    method: POST
+    headers:
+      Referer: https://one.sipac.gov.cn/szgyyqwsdtfr/szyqzwdt/html/pages/publicresource/tradelist.html
+      Accept: application/json, text/javascript, */*; q=0.01
+      X-Requested-With: XMLHttpRequest
+    params: {}
+    timeout_seconds: 40
+    retries: 2
+    retry_backoff_seconds: 0.8
+    verify_ssl: true
+
+  pagination:
+    mode: json_template
+    start_page: 1
+    end_page: 3
+    json_template: '{"resturl":"getInfoListNew","restparams":{"infoType":"0","siteguid":"7eb5f7f1-9041-43ad-8e13-8fcb82ea831a","cateNum":"004001","width":"636","pageSize":"10","endtime":"","starttime":"","title":"","currentPageIndex":{page_index},"height":"379"}}'
+
+  crypto:
+    enabled: true
+    module: epoint
+    public_key: "04CE47B87597B6F8136637E0CA5E4C823C5AD935500ECF67BBEC1597D49A9DB34D346AB11EFE65D51BD4EDC3C12E8F8FA0B6C612FE802FF279655FBF00887CB50D"
+    aes_key: "qnbpwgttcfv96fgw"
+    aes_iv: "5141928399038306"
+    token: "Epoint_WebSerivce_**##0601"
+    sm2_mode: 0
+
+  detail_request:
+    method: POST
+    url: "https://one.sipac.gov.cn/szgyyqwsdtfr/rest/qyxy/toapimanager"
+    body_template: '{"resturl":"getInfoDetailNew","restparams":{"infoID":"{link}","siteguid":"7eb5f7f1-9041-43ad-8e13-8fcb82ea831a"}}'
+
+  cookie:
+    enabled: false
+
+  dedup:
+    redis_hash_key: zhaobiao:domian:linkqc
+    ttl_days: 30
+    prune_probability: 0.01
+
+  list_extraction:
+    response_html_selectors: []
+    item_selectors:
+      - kind: jsonpath
+        expr: $.custom.infoList[*]
+    link_selectors:
+      - kind: jsonpath
+        expr: $.infoID
+    title_selectors:
+      - kind: jsonpath
+        expr: $.title
+    date_selectors:
+      - kind: jsonpath
+        expr: $.infoDate
+    detail_url_template: "https://one.sipac.gov.cn/szgyyqwsdtfr/szyqzwdt/html/pages/publicresource/detail.html?infoID={value}"
+    min_title_length: 6
+    fallback_auto: false
+
+  detail_extraction:
+    response_html_selectors:
+      - kind: jsonpath
+        expr: $.custom.custom.infoContent
+    content_selectors:
+      - kind: xpath
+        expr: //body
+    fallback_auto: true
+    fallback_readability: true
+    min_content_length: 30
+
+  attachments:
+    enabled: true
+    selectors:
+      - kind: jsonpath
+        expr: $.custom.custom.attachFiles[*].attUrl
+    filename_selectors:
+      - kind: jsonpath
+        expr: $.custom.custom.attachFiles[*].attFileName
+    allowed_extensions: []
+    max_bytes: 52428800
+
+  classification:
+    default_type: zhaobiao
+    zhongbiao_keywords: []
+
+  area_extraction:
+    enabled: true
+    fixed_value: 江苏
+    use_title_first: true
+
+  output:
+    enabled: true
+    queue_zhaobiao: zhaobiao:result:zhaobiao
+    queue_zhongbiao: zhaobiao:result:zhongbiao
+    attachment_dir_zhaobiao: /root/pachong/zhaobiao/data/附件
+    attachment_dir_zhongbiao: /root/pachong/zhaobiao/data_zb/附件
+
+- id: sipac_ggzy_td_cjgs
+  enabled: true
+  name: 苏州工业园区公共资源交易-土地电力及其他-土地成交公示
+  entry_urls:
+    - https://one.sipac.gov.cn/szgyyqwsdtfr/rest/qyxy/toapimanager
+
+  schedule:
+    enabled: true
+    interval_seconds: 3600
+
+  limits:
+    max_concurrency: 2
+    request_interval_seconds: 0.5
+
+  request:
+    method: POST
+    headers:
+      Referer: https://one.sipac.gov.cn/szgyyqwsdtfr/szyqzwdt/html/pages/publicresource/tradelist.html
+      Accept: application/json, text/javascript, */*; q=0.01
+      X-Requested-With: XMLHttpRequest
+    params: {}
+    timeout_seconds: 40
+    retries: 2
+    retry_backoff_seconds: 0.8
+    verify_ssl: true
+
+  pagination:
+    mode: json_template
+    start_page: 1
+    end_page: 3
+    json_template: '{"resturl":"getInfoListNew","restparams":{"infoType":"0","siteguid":"7eb5f7f1-9041-43ad-8e13-8fcb82ea831a","cateNum":"004002","width":"636","pageSize":"10","endtime":"","starttime":"","title":"","currentPageIndex":{page_index},"height":"379"}}'
+
+  crypto:
+    enabled: true
+    module: epoint
+    public_key: "04CE47B87597B6F8136637E0CA5E4C823C5AD935500ECF67BBEC1597D49A9DB34D346AB11EFE65D51BD4EDC3C12E8F8FA0B6C612FE802FF279655FBF00887CB50D"
+    aes_key: "qnbpwgttcfv96fgw"
+    aes_iv: "5141928399038306"
+    token: "Epoint_WebSerivce_**##0601"
+    sm2_mode: 0
+
+  detail_request:
+    method: POST
+    url: "https://one.sipac.gov.cn/szgyyqwsdtfr/rest/qyxy/toapimanager"
+    body_template: '{"resturl":"getInfoDetailNew","restparams":{"infoID":"{link}","siteguid":"7eb5f7f1-9041-43ad-8e13-8fcb82ea831a"}}'
+
+  cookie:
+    enabled: false
+
+  dedup:
+    redis_hash_key: zhaobiao:domian:linkqc
+    ttl_days: 30
+    prune_probability: 0.01
+
+  list_extraction:
+    response_html_selectors: []
+    item_selectors:
+      - kind: jsonpath
+        expr: $.custom.infoList[*]
+    link_selectors:
+      - kind: jsonpath
+        expr: $.infoID
+    title_selectors:
+      - kind: jsonpath
+        expr: $.title
+    date_selectors:
+      - kind: jsonpath
+        expr: $.infoDate
+    detail_url_template: "https://one.sipac.gov.cn/szgyyqwsdtfr/szyqzwdt/html/pages/publicresource/detail.html?infoID={value}"
+    min_title_length: 6
+    fallback_auto: false
+
+  detail_extraction:
+    response_html_selectors:
+      - kind: jsonpath
+        expr: $.custom.custom.infoContent
+    content_selectors:
+      - kind: xpath
+        expr: //body
+    fallback_auto: true
+    fallback_readability: true
+    min_content_length: 30
+
+  attachments:
+    enabled: true
+    selectors:
+      - kind: jsonpath
+        expr: $.custom.custom.attachFiles[*].attUrl
+    filename_selectors:
+      - kind: jsonpath
+        expr: $.custom.custom.attachFiles[*].attFileName
+    allowed_extensions: []
+    max_bytes: 52428800
+
+  classification:
+    default_type: zhongbiao
+    zhongbiao_keywords: []
+
+  area_extraction:
+    enabled: true
+    fixed_value: 江苏
+    use_title_first: true
+
+  output:
+    enabled: true
+    queue_zhaobiao: zhaobiao:result:zhaobiao
+    queue_zhongbiao: zhaobiao:result:zhongbiao
+    attachment_dir_zhaobiao: /root/pachong/zhaobiao/data/附件
+    attachment_dir_zhongbiao: /root/pachong/zhaobiao/data_zb/附件
+
+- id: sipac_ggzy_zf_cggg
+  enabled: true
+  name: 苏州工业园区公共资源交易-政府采购-政府采购项目公告
+  entry_urls:
+    - https://one.sipac.gov.cn/szgyyqwsdtfr/rest/qyxy/toapimanager
+
+  schedule:
+    enabled: true
+    interval_seconds: 3600
+
+  limits:
+    max_concurrency: 2
+    request_interval_seconds: 0.5
+
+  request:
+    method: POST
+    headers:
+      Referer: https://one.sipac.gov.cn/szgyyqwsdtfr/szyqzwdt/html/pages/publicresource/tradelist.html
+      Accept: application/json, text/javascript, */*; q=0.01
+      X-Requested-With: XMLHttpRequest
+    params: {}
+    timeout_seconds: 40
+    retries: 2
+    retry_backoff_seconds: 0.8
+    verify_ssl: true
+
+  pagination:
+    mode: json_template
+    start_page: 1
+    end_page: 3
+    json_template: '{"resturl":"getInfoListNew","restparams":{"infoType":"0","siteguid":"7eb5f7f1-9041-43ad-8e13-8fcb82ea831a","cateNum":"002001","width":"636","pageSize":"10","endtime":"","starttime":"","title":"","currentPageIndex":{page_index},"height":"379"}}'
+
+  crypto:
+    enabled: true
+    module: epoint
+    public_key: "04CE47B87597B6F8136637E0CA5E4C823C5AD935500ECF67BBEC1597D49A9DB34D346AB11EFE65D51BD4EDC3C12E8F8FA0B6C612FE802FF279655FBF00887CB50D"
+    aes_key: "qnbpwgttcfv96fgw"
+    aes_iv: "5141928399038306"
+    token: "Epoint_WebSerivce_**##0601"
+    sm2_mode: 0
+
+  detail_request:
+    method: POST
+    url: "https://one.sipac.gov.cn/szgyyqwsdtfr/rest/qyxy/toapimanager"
+    body_template: '{"resturl":"getInfoDetailNew","restparams":{"infoID":"{link}","siteguid":"7eb5f7f1-9041-43ad-8e13-8fcb82ea831a"}}'
+
+  cookie:
+    enabled: false
+
+  dedup:
+    redis_hash_key: zhaobiao:domian:linkqc
+    ttl_days: 30
+    prune_probability: 0.01
+
+  list_extraction:
+    response_html_selectors: []
+    item_selectors:
+      - kind: jsonpath
+        expr: $.custom.infoList[*]
+    link_selectors:
+      - kind: jsonpath
+        expr: $.infoID
+    title_selectors:
+      - kind: jsonpath
+        expr: $.title
+    date_selectors:
+      - kind: jsonpath
+        expr: $.infoDate
+    detail_url_template: "https://one.sipac.gov.cn/szgyyqwsdtfr/szyqzwdt/html/pages/publicresource/detail.html?infoID={value}"
+    min_title_length: 6
+    fallback_auto: false
+
+  detail_extraction:
+    response_html_selectors:
+      - kind: jsonpath
+        expr: $.custom.custom.infoContent
+    content_selectors:
+      - kind: xpath
+        expr: //body
+    fallback_auto: true
+    fallback_readability: true
+    min_content_length: 30
+
+  attachments:
+    enabled: true
+    selectors:
+      - kind: jsonpath
+        expr: $.custom.custom.attachFiles[*].attUrl
+    filename_selectors:
+      - kind: jsonpath
+        expr: $.custom.custom.attachFiles[*].attFileName
+    allowed_extensions: []
+    max_bytes: 52428800
+
+  classification:
+    default_type: zhaobiao
+    zhongbiao_keywords: []
+
+  area_extraction:
+    enabled: true
+    fixed_value: 江苏
+    use_title_first: true
+
+  output:
+    enabled: true
+    queue_zhaobiao: zhaobiao:result:zhaobiao
+    queue_zhongbiao: zhaobiao:result:zhongbiao
+    attachment_dir_zhaobiao: /root/pachong/zhaobiao/data/附件
+    attachment_dir_zhongbiao: /root/pachong/zhaobiao/data_zb/附件
