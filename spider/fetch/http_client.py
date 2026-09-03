@@ -31,6 +31,8 @@ class FetchRequest:
     verify_ssl: bool = False
     # 可选加解密对象：提供 encrypt(inner)->str 与 decrypt(text)->str
     crypto: Optional[object] = None
+    # 用无头 Chrome 渲染（针对 JS 反爬）
+    use_chrome: bool = False
 
 
 @dataclass
@@ -78,7 +80,10 @@ class HttpFetcher(object):
             attempt_no = attempt + 1
             start = time.time()
             try:
-                response = self._do_fetch(req, headers)
+                if req.use_chrome:
+                    response = self._fetch_chrome(req)
+                else:
+                    response = self._do_fetch(req, headers)
                 cost = round(time.time() - start, 3)
                 log_event(
                     self.logger,
@@ -116,6 +121,56 @@ class HttpFetcher(object):
         if last_error is None:
             raise RuntimeError("fetch failed without explicit exception")
         raise last_error
+
+    _CHROME_CANDIDATES = [
+        r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+        r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+        r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+        r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
+        "/usr/bin/google-chrome",
+        "/usr/bin/chromium-browser",
+        "/usr/bin/chromium",
+    ]
+
+    @staticmethod
+    def _find_chrome():
+        import os
+        for candidate in HttpFetcher._CHROME_CANDIDATES:
+            if os.path.exists(candidate):
+                return candidate
+        return None
+
+    def _fetch_chrome(self, req):
+        # type: (FetchRequest) -> FetchResponse
+        import shutil
+        import subprocess
+        import tempfile
+
+        chrome = self._find_chrome()
+        if chrome is None:
+            raise RuntimeError("No Chrome/Edge binary found for use_chrome fetch")
+
+        profile = tempfile.mkdtemp(prefix="spider_chrome_")
+        try:
+            cmd = [
+                chrome,
+                "--headless=new",
+                "--disable-gpu",
+                "--no-sandbox",
+                "--disable-blink-features=AutomationControlled",
+                "--window-size=1920,1080",
+                "--user-agent=" + self.user_agent,
+                "--user-data-dir=" + profile,
+                "--dump-dom",
+                "--virtual-time-budget=12000",
+                req.url,
+            ]
+            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+            out, _ = proc.communicate(timeout=max(req.timeout_seconds + 30, 60))
+            text = self._decode_bytes(out, "text/html")
+            return FetchResponse(status_code=200, text=text, content=out, headers={}, url=req.url)
+        finally:
+            shutil.rmtree(profile, ignore_errors=True)
 
     def _do_fetch(self, req, headers):
         # type: (FetchRequest, Dict[str, str]) -> FetchResponse

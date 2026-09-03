@@ -1,5 +1,5 @@
 ﻿redis:
-  host: 10.10.27.220
+  host: 10.10.27.209
   port: 6379
   db: 1
   password: fanwei@123

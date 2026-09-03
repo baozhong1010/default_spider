@@ -1,0 +1,303 @@
+# 国铁采购平台（cg.95306.cn）采购公告类站点
+# 列表接口：POST /proxy/portal/elasticSearch/queryProcurementNoticeList（表单）
+# 详情接口：POST /proxy/portal/elasticSearch/indexView（表单，noticeId）
+
+- id: cg95306_zbgg
+  enabled: true
+  name: 国铁采购平台-采购公告(项目公告)
+  entry_urls:
+    - https://cg.95306.cn/proxy/portal/elasticSearch/queryProcurementNoticeList
+
+  schedule:
+    enabled: true
+    interval_seconds: 3600
+
+  limits:
+    max_concurrency: 3
+    request_interval_seconds: 0.5
+
+  request:
+    method: POST
+    headers:
+      Referer: https://cg.95306.cn/baseinfor/notice/procurementNotice
+      Accept: application/json, text/javascript, */*; q=0.01
+      X-Requested-With: XMLHttpRequest
+    params: {}
+    timeout_seconds: 40
+    retries: 2
+    retry_backoff_seconds: 0.8
+    verify_ssl: true
+
+  pagination:
+    mode: data_template
+    start_page: 1
+    end_page: 3
+    data_template: "mhId={random}&Authorization=&projBidType=01&bidType=&noticeType=01&wzType=&title=&unitType=&inforCode=&startDate=&endDate=&pageNum={page_index}&projType=01&createPeopUnit=&sortCondition=0"
+
+  detail_request:
+    method: POST
+    url: "https://cg.95306.cn/proxy/portal/elasticSearch/indexView"
+    data_template: "noticeId={link}&mhId={random}&Authorization="
+
+  cookie:
+    enabled: false
+
+  dedup:
+    redis_hash_key: zhaobiao:domian:linkqc
+    ttl_days: 30
+    prune_probability: 0.01
+
+  list_extraction:
+    response_html_selectors: []
+    item_selectors:
+      - kind: jsonpath
+        expr: $.data.resultData.result[*]
+    link_selectors:
+      - kind: jsonpath
+        expr: $.id
+    title_selectors:
+      - kind: jsonpath
+        expr: $.notTitle
+    date_selectors:
+      - kind: jsonpath
+        expr: $.checkTime
+    detail_url_template: "https://cg.95306.cn/baseinfor/notice/informationShow?id={value}"
+    min_title_length: 4
+    fallback_auto: false
+
+  detail_extraction:
+    response_html_selectors:
+      - kind: jsonpath
+        expr: $.data.noticeContent.notCont
+    content_selectors:
+      - kind: xpath
+        expr: //body
+    fallback_auto: true
+    fallback_readability: true
+    min_content_length: 20
+
+  attachments:
+    enabled: true
+    selectors:
+      - kind: jsonpath
+        expr: $.data.forwardList[*].filepath
+    filename_selectors:
+      - kind: jsonpath
+        expr: $.data.forwardList[*].filename
+    allowed_extensions: []
+    max_bytes: 52428800
+
+  classification:
+    default_type: zhaobiao
+    zhongbiao_keywords: []
+
+  area_extraction:
+    enabled: true
+    use_title_first: true
+
+  output:
+    enabled: true
+    queue_zhaobiao: zhaobiao:result:zhaobiao
+    queue_zhongbiao: zhaobiao:result:zhongbiao
+    attachment_dir_zhaobiao: /root/pachong/zhaobiao/data/附件
+    attachment_dir_zhongbiao: /root/pachong/zhaobiao/data_zb/附件
+
+- id: cg95306_bggg
+  enabled: true
+  name: 国铁采购平台-采购变更公告
+  entry_urls:
+    - https://cg.95306.cn/proxy/portal/elasticSearch/queryProcurementNoticeList
+
+  schedule:
+    enabled: true
+    interval_seconds: 3600
+
+  limits:
+    max_concurrency: 3
+    request_interval_seconds: 0.5
+
+  request:
+    method: POST
+    headers:
+      Referer: https://cg.95306.cn/baseinfor/notice/procurementNotice
+      Accept: application/json, text/javascript, */*; q=0.01
+      X-Requested-With: XMLHttpRequest
+    params: {}
+    timeout_seconds: 40
+    retries: 2
+    retry_backoff_seconds: 0.8
+    verify_ssl: true
+
+  pagination:
+    mode: data_template
+    start_page: 1
+    end_page: 3
+    data_template: "mhId={random}&Authorization=&projBidType=01&bidType=&noticeType=02&wzType=&title=&unitType=&inforCode=&startDate=&endDate=&pageNum={page_index}&projType=01&createPeopUnit=&sortCondition=0"
+
+  detail_request:
+    method: POST
+    url: "https://cg.95306.cn/proxy/portal/elasticSearch/indexView"
+    data_template: "noticeId={link}&mhId={random}&Authorization="
+
+  cookie:
+    enabled: false
+
+  dedup:
+    redis_hash_key: zhaobiao:domian:linkqc
+    ttl_days: 30
+    prune_probability: 0.01
+
+  list_extraction:
+    response_html_selectors: []
+    item_selectors:
+      - kind: jsonpath
+        expr: $.data.resultData.result[*]
+    link_selectors:
+      - kind: jsonpath
+        expr: $.id
+    title_selectors:
+      - kind: jsonpath
+        expr: $.notTitle
+    date_selectors:
+      - kind: jsonpath
+        expr: $.checkTime
+    detail_url_template: "https://cg.95306.cn/baseinfor/notice/informationShow?id={value}"
+    min_title_length: 4
+    fallback_auto: false
+
+  detail_extraction:
+    response_html_selectors:
+      - kind: jsonpath
+        expr: $.data.noticeContent.notCont
+    content_selectors:
+      - kind: xpath
+        expr: //body
+    fallback_auto: true
+    fallback_readability: true
+    min_content_length: 20
+
+  attachments:
+    enabled: true
+    selectors:
+      - kind: jsonpath
+        expr: $.data.forwardList[*].filepath
+    filename_selectors:
+      - kind: jsonpath
+        expr: $.data.forwardList[*].filename
+    allowed_extensions: []
+    max_bytes: 52428800
+
+  classification:
+    default_type: zhaobiao
+    zhongbiao_keywords: []
+
+  area_extraction:
+    enabled: true
+    use_title_first: true
+
+  output:
+    enabled: true
+    queue_zhaobiao: zhaobiao:result:zhaobiao
+    queue_zhongbiao: zhaobiao:result:zhongbiao
+    attachment_dir_zhaobiao: /root/pachong/zhaobiao/data/附件
+    attachment_dir_zhongbiao: /root/pachong/zhaobiao/data_zb/附件
+
+- id: cg95306_zbjg
+  enabled: true
+  name: 国铁采购平台-采购结果公告
+  entry_urls:
+    - https://cg.95306.cn/proxy/portal/elasticSearch/queryProcurementNoticeList
+
+  schedule:
+    enabled: true
+    interval_seconds: 3600
+
+  limits:
+    max_concurrency: 3
+    request_interval_seconds: 0.5
+
+  request:
+    method: POST
+    headers:
+      Referer: https://cg.95306.cn/baseinfor/notice/procurementNotice
+      Accept: application/json, text/javascript, */*; q=0.01
+      X-Requested-With: XMLHttpRequest
+    params: {}
+    timeout_seconds: 40
+    retries: 2
+    retry_backoff_seconds: 0.8
+    verify_ssl: true
+
+  pagination:
+    mode: data_template
+    start_page: 1
+    end_page: 3
+    data_template: "mhId={random}&Authorization=&projBidType=01&bidType=&noticeType=03&wzType=&title=&unitType=&inforCode=&startDate=&endDate=&pageNum={page_index}&projType=01&createPeopUnit=&sortCondition=0"
+
+  detail_request:
+    method: POST
+    url: "https://cg.95306.cn/proxy/portal/elasticSearch/indexView"
+    data_template: "noticeId={link}&mhId={random}&Authorization="
+
+  cookie:
+    enabled: false
+
+  dedup:
+    redis_hash_key: zhaobiao:domian:linkqc
+    ttl_days: 30
+    prune_probability: 0.01
+
+  list_extraction:
+    response_html_selectors: []
+    item_selectors:
+      - kind: jsonpath
+        expr: $.data.resultData.result[*]
+    link_selectors:
+      - kind: jsonpath
+        expr: $.id
+    title_selectors:
+      - kind: jsonpath
+        expr: $.notTitle
+    date_selectors:
+      - kind: jsonpath
+        expr: $.checkTime
+    detail_url_template: "https://cg.95306.cn/baseinfor/notice/informationShow?id={value}"
+    min_title_length: 4
+    fallback_auto: false
+
+  detail_extraction:
+    response_html_selectors:
+      - kind: jsonpath
+        expr: $.data.noticeContent.notCont
+    content_selectors:
+      - kind: xpath
+        expr: //body
+    fallback_auto: true
+    fallback_readability: true
+    min_content_length: 20
+
+  attachments:
+    enabled: true
+    selectors:
+      - kind: jsonpath
+        expr: $.data.forwardList[*].filepath
+    filename_selectors:
+      - kind: jsonpath
+        expr: $.data.forwardList[*].filename
+    allowed_extensions: []
+    max_bytes: 52428800
+
+  classification:
+    default_type: zhongbiao
+    zhongbiao_keywords: []
+
+  area_extraction:
+    enabled: true
+    use_title_first: true
+
+  output:
+    enabled: true
+    queue_zhaobiao: zhaobiao:result:zhaobiao
+    queue_zhongbiao: zhaobiao:result:zhongbiao
+    attachment_dir_zhaobiao: /root/pachong/zhaobiao/data/附件
+    attachment_dir_zhongbiao: /root/pachong/zhaobiao/data_zb/附件

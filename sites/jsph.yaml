@@ -1,0 +1,183 @@
+# 江苏省人民医院招标采购平台（zhaobiao.jsph.org.cn）
+# 瑞数动态反爬：request.use_chrome=true，由无头 Chrome 渲染页面并自动通过校验。
+# 注意：附件下载仍走 urllib，瑞数 Cookie 时效短，附件可能下载失败（不影响正文抓取）。
+
+- id: jsph_cgxx
+  enabled: true
+  name: 江苏省人民医院-采购信息
+  entry_urls:
+    - http://zhaobiao.jsph.org.cn/supplier/release/cgInfoList
+
+  schedule:
+    enabled: true
+    interval_seconds: 3600
+
+  limits:
+    max_concurrency: 1
+    request_interval_seconds: 1.0
+
+  request:
+    method: GET
+    use_chrome: true
+    headers:
+      Referer: http://zhaobiao.jsph.org.cn/supplier/release/cgInfoList
+    params: {}
+    timeout_seconds: 60
+    retries: 1
+    retry_backoff_seconds: 0.8
+    verify_ssl: true
+
+  pagination:
+    mode: url_template
+    start_page: 1
+    end_page: 3
+    url_template: "{base_url}?pageNo={page}&pageSize=10"
+
+  cookie:
+    enabled: false
+
+  dedup:
+    redis_hash_key: zhaobiao:domian:linkqc
+    ttl_days: 30
+    prune_probability: 0.01
+
+  list_extraction:
+    response_html_selectors: []
+    item_selectors:
+      - kind: xpath
+        expr: //dl[contains(@class, "llist")]//dd
+    link_selectors:
+      - kind: xpath
+        expr: 'substring-before(substring-after(.//a[@id="detailUrl"]/@href, "cgInfoDetail(''"), "''")'
+    title_selectors:
+      - kind: xpath
+        expr: .//a[@id="detailUrl"]/@title
+      - kind: xpath
+        expr: .//a[@id="detailUrl"]//text()
+    date_selectors:
+      - kind: xpath
+        expr: .//span[contains(@class, "date")]/text()
+    detail_url_template: "http://zhaobiao.jsph.org.cn/supplier/release/releaseCgInfoDetail?id={value}"
+    min_title_length: 4
+    fallback_auto: false
+
+  detail_extraction:
+    response_html_selectors: []
+    content_selectors:
+      - kind: xpath
+        expr: //div[contains(@class, "contentStyle")]
+    fallback_auto: true
+    fallback_readability: true
+    min_content_length: 20
+
+  attachments:
+    enabled: false
+    selectors: []
+    allowed_extensions: []
+    max_bytes: 52428800
+
+  classification:
+    default_type: zhaobiao
+    zhongbiao_keywords: []
+
+  area_extraction:
+    enabled: true
+    fixed_value: 江苏
+    use_title_first: true
+
+  output:
+    enabled: true
+    queue_zhaobiao: zhaobiao:result:zhaobiao
+    queue_zhongbiao: zhaobiao:result:zhongbiao
+    attachment_dir_zhaobiao: /root/pachong/zhaobiao/data/附件
+    attachment_dir_zhongbiao: /root/pachong/zhaobiao/data_zb/附件
+
+- id: jsph_cjjg
+  enabled: true
+  name: 江苏省人民医院-结果公告
+  entry_urls:
+    - http://zhaobiao.jsph.org.cn/supplier/release/cjgsList
+
+  schedule:
+    enabled: true
+    interval_seconds: 3600
+
+  limits:
+    max_concurrency: 1
+    request_interval_seconds: 1.0
+
+  request:
+    method: GET
+    use_chrome: true
+    headers:
+      Referer: http://zhaobiao.jsph.org.cn/supplier/release/cjgsList
+    params: {}
+    timeout_seconds: 60
+    retries: 1
+    retry_backoff_seconds: 0.8
+    verify_ssl: true
+
+  pagination:
+    mode: url_template
+    start_page: 1
+    end_page: 3
+    url_template: "{base_url}?pageNo={page}&pageSize=10"
+
+  cookie:
+    enabled: false
+
+  dedup:
+    redis_hash_key: zhaobiao:domian:linkqc
+    ttl_days: 30
+    prune_probability: 0.01
+
+  list_extraction:
+    response_html_selectors: []
+    item_selectors:
+      - kind: xpath
+        expr: //dl[contains(@class, "llist")]//dd
+    link_selectors:
+      - kind: xpath
+        expr: 'substring-before(substring-after(.//a[@id="detailUrl"]/@href, "cjgsDetail(''"), "''")'
+    title_selectors:
+      - kind: xpath
+        expr: .//a[@id="detailUrl"]/@title
+      - kind: xpath
+        expr: .//a[@id="detailUrl"]//text()
+    date_selectors:
+      - kind: xpath
+        expr: .//span[contains(@class, "date")]/text()
+    detail_url_template: "http://zhaobiao.jsph.org.cn/supplier/release/releaseCjgsDetail?id={value}"
+    min_title_length: 4
+    fallback_auto: false
+
+  detail_extraction:
+    response_html_selectors: []
+    content_selectors:
+      - kind: xpath
+        expr: //div[contains(@class, "contentStyle")]
+    fallback_auto: true
+    fallback_readability: true
+    min_content_length: 20
+
+  attachments:
+    enabled: false
+    selectors: []
+    allowed_extensions: []
+    max_bytes: 52428800
+
+  classification:
+    default_type: zhongbiao
+    zhongbiao_keywords: []
+
+  area_extraction:
+    enabled: true
+    fixed_value: 江苏
+    use_title_first: true
+
+  output:
+    enabled: true
+    queue_zhaobiao: zhaobiao:result:zhaobiao
+    queue_zhongbiao: zhaobiao:result:zhongbiao
+    attachment_dir_zhaobiao: /root/pachong/zhaobiao/data/附件
+    attachment_dir_zhongbiao: /root/pachong/zhaobiao/data_zb/附件

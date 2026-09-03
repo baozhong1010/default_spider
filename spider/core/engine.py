@@ -3,6 +3,7 @@ import datetime as dt
 import hashlib
 import json
 import logging
+import urllib.parse
 import uuid
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -159,6 +160,7 @@ class SpiderEngine(object):
                 retry_backoff_seconds=site.request.retry_backoff_seconds,
                 verify_ssl=site.request.verify_ssl,
                 crypto=crypto,
+                use_chrome=site.request.use_chrome,
             )
             try:
                 resp = await self.fetcher.fetch(req, cookie=cookie)
@@ -270,23 +272,35 @@ class SpiderEngine(object):
             detail_url = item.url
             detail_method = "GET"
             detail_json = None
+            detail_data = None
+            raw_link = getattr(item, "raw_url", "") or item.url
             if site.detail_request.body_template:
                 detail_url = site.detail_request.url or (site.entry_urls[0] if site.entry_urls else item.url)
                 detail_method = site.detail_request.method or "POST"
-                raw_link = getattr(item, "raw_url", "") or item.url
                 body_str = site.detail_request.body_template.replace("{link}", raw_link).replace("{title}", item.title)
                 detail_json = json.loads(body_str)
+            elif site.detail_request.data_template:
+                detail_url = site.detail_request.url or (site.entry_urls[0] if site.entry_urls else item.url)
+                detail_method = site.detail_request.method or "POST"
+                data_str = site.detail_request.data_template.replace("{link}", raw_link).replace("{title}", item.title)
+                data_str = data_str.replace("{random}", uuid.uuid4().hex[:16])
+                parsed = urllib.parse.parse_qs(data_str, keep_blank_values=True)
+                detail_data = {}
+                for k, v in parsed.items():
+                    detail_data[k] = v[0] if v else ""
 
             req = FetchRequest(
                 url=detail_url,
                 method=detail_method,
                 headers=site.request.headers,
+                data=detail_data,
                 json=detail_json,
                 timeout_seconds=site.request.timeout_seconds,
                 retries=site.request.retries,
                 retry_backoff_seconds=site.request.retry_backoff_seconds,
                 verify_ssl=site.request.verify_ssl,
                 crypto=crypto,
+                use_chrome=site.request.use_chrome,
             )
 
             try:

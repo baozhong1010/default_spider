@@ -51,24 +51,29 @@ class RequestConfig(BaseModel):
     retries: int = 2
     retry_backoff_seconds: float = 0.6
     verify_ssl: bool = False
+    # 用无头 Chrome 渲染页面（针对瑞数等 JS 反爬），仅对列表/详情页生效
+    use_chrome: bool = False
 
     class Config:
         allow_population_by_field_name = True
 
 
 class PaginationConfig(BaseModel):
-    mode: Literal["none", "page_param", "url_template", "json_template"] = "none"
+    mode: Literal["none", "page_param", "url_template", "json_template", "data_template"] = "none"
     start_page: int = 1
     end_page: int = 1
     page_param: str = "page"
     url_template: Optional[str] = None
     json_template: Optional[str] = None
+    # 表单（application/x-www-form-urlencoded）请求体模板，支持 {page} 与 {page_index} 占位符
+    data_template: Optional[str] = None
 
     @root_validator(skip_on_failure=True)
     def validate_pagination(cls, values):
         mode = values.get("mode")
         url_template = values.get("url_template")
         json_template = values.get("json_template")
+        data_template = values.get("data_template")
         start_page = values.get("start_page")
         end_page = values.get("end_page")
 
@@ -76,6 +81,8 @@ class PaginationConfig(BaseModel):
             raise ValueError("url_template is required when mode=url_template")
         if mode == "json_template" and not json_template:
             raise ValueError("json_template is required when mode=json_template")
+        if mode == "data_template" and not data_template:
+            raise ValueError("data_template is required when mode=data_template")
         if end_page < start_page:
             raise ValueError("end_page must be >= start_page")
         return values
@@ -96,8 +103,10 @@ class DetailRequestConfig(BaseModel):
     method: str = "GET"
     # 详情接口地址；为空时回退到 entry_urls[0]。
     url: Optional[str] = None
-    # 内层请求体模板，支持 {link}（列表项的详情链接，即 infoID）与 {title} 占位符。
+    # 内层 JSON 请求体模板，支持 {link}（列表项的详情链接，即 infoID）与 {title} 占位符。
     body_template: Optional[str] = None
+    # 表单（application/x-www-form-urlencoded）请求体模板，支持 {link} 与 {title} 占位符。
+    data_template: Optional[str] = None
 
 
 class ScheduleConfig(BaseModel):

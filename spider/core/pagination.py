@@ -1,6 +1,9 @@
 import json as _json
+import uuid
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Union
+
+import urllib.parse as _urlparse
 
 from spider.config.models import PaginationConfig, RequestConfig
 
@@ -46,17 +49,31 @@ def build_list_request_tasks(entry_urls, request_cfg, pagination_cfg):
             elif mode == "json_template":
                 params = dict(request_cfg.params)
                 task_url = url
+            elif mode == "data_template":
+                params = dict(request_cfg.params)
+                task_url = url
             else:
                 params = dict(request_cfg.params)
                 task_url = url
 
             task_json = request_cfg.json_body
+            task_data = request_cfg.data
             if mode == "json_template":
                 rendered = pagination_cfg.json_template
                 rendered = rendered.replace("{page_index}", str(page - 1))
                 rendered = rendered.replace("{page}", str(page))
                 rendered = rendered.replace("{base_url}", url)
                 task_json = _json.loads(rendered)
+            elif mode == "data_template":
+                rendered = pagination_cfg.data_template
+                rendered = rendered.replace("{page_index}", str(page - 1))
+                rendered = rendered.replace("{page}", str(page))
+                rendered = rendered.replace("{base_url}", url)
+                rendered = rendered.replace("{random}", uuid.uuid4().hex[:16])
+                parsed = _urlparse.parse_qs(rendered, keep_blank_values=True)
+                task_data = {}
+                for k, v in parsed.items():
+                    task_data[k] = v[0] if v else ""
 
             tasks.append(
                 RequestTask(
@@ -64,7 +81,7 @@ def build_list_request_tasks(entry_urls, request_cfg, pagination_cfg):
                     method=request_cfg.method,
                     headers=dict(request_cfg.headers),
                     params=params,
-                    data=request_cfg.data,
+                    data=task_data,
                     json=task_json,
                 )
             )
