@@ -1,0 +1,180 @@
+# 医疗招标网（www.yiliaozhaobiao.com）——Vue SSR 站点
+# 列表页 HTML 内嵌 window._STATIC_DATA_，其中 listData 为 JSON 数组字符串，
+# 每项含 title / url(相对路径 /news-<hash>/) / updateTime。
+# 分页：URL 路径最后一段（.../010/1/ → /2/）；entry 用无页码基础路径 + url_template。
+# 详情页 /news-<hash>/ 为 SSR，正文在 div.detail-text。
+# 附件（attachment-item）无 href，下载需登录（registerDialogShow），故禁用附件抓取。
+
+- id: yiliaozhaobiao_ylgg
+  enabled: true
+  name: 医疗招标网-招标公告(全国)
+  entry_urls:
+    - https://www.yiliaozhaobiao.com/ylgg-2703/010/
+
+  schedule:
+    enabled: true
+    interval_seconds: 3600
+
+  limits:
+    max_concurrency: 3
+    request_interval_seconds: 0.5
+
+  request:
+    method: GET
+    headers:
+      Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8
+    params: {}
+    timeout_seconds: 40
+    retries: 2
+    retry_backoff_seconds: 0.8
+    verify_ssl: false
+
+  pagination:
+    mode: url_template
+    start_page: 1
+    end_page: 3
+    url_template: "{base_url}{page}/"
+
+  cookie:
+    enabled: false
+
+  dedup:
+    redis_hash_key: zhaobiao:domian:linkqc
+    ttl_days: 30
+    prune_probability: 0.01
+
+  list_extraction:
+    response_html_selectors:
+      - kind: regex
+        expr: 'listData\s*:\s*''(\[[\s\S]*?\])'''
+    item_selectors:
+      - kind: jsonpath
+        expr: "$[*]"
+    link_selectors:
+      - kind: jsonpath
+        expr: $.url
+    title_selectors:
+      - kind: jsonpath
+        expr: $.title
+    date_selectors:
+      - kind: jsonpath
+        expr: $.updateTime
+    min_title_length: 8
+    fallback_auto: false
+
+  detail_extraction:
+    response_html_selectors: []
+    content_selectors:
+      - kind: xpath
+        expr: '//div[contains(@class, "detail-text")]'
+    fallback_auto: true
+    fallback_readability: true
+    min_content_length: 30
+
+  attachments:
+    enabled: false
+    selectors: []
+    allowed_extensions: []
+    max_bytes: 52428800
+
+  classification:
+    default_type: zhaobiao
+    zhongbiao_keywords: []
+
+  area_extraction:
+    enabled: true
+    use_title_first: true
+
+  output:
+    enabled: true
+    queue_zhaobiao: zhaobiao:result:zhaobiao
+    queue_zhongbiao: zhaobiao:result:zhongbiao
+    attachment_dir_zhaobiao: /root/pachong/zhaobiao/data/附件
+    attachment_dir_zhongbiao: /root/pachong/zhaobiao/data_zb/附件
+
+- id: yiliaozhaobiao_ylzb
+  enabled: true
+  name: 医疗招标网-中标公告(全国)
+  entry_urls:
+    - https://www.yiliaozhaobiao.com/ylzb-2703/010/
+
+  schedule:
+    enabled: true
+    interval_seconds: 3600
+
+  limits:
+    max_concurrency: 3
+    request_interval_seconds: 0.5
+
+  request:
+    method: GET
+    headers:
+      Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8
+    params: {}
+    timeout_seconds: 40
+    retries: 2
+    retry_backoff_seconds: 0.8
+    verify_ssl: false
+
+  pagination:
+    mode: url_template
+    start_page: 1
+    end_page: 3
+    url_template: "{base_url}{page}/"
+
+  cookie:
+    enabled: false
+
+  dedup:
+    redis_hash_key: zhaobiao:domian:linkqc
+    ttl_days: 30
+    prune_probability: 0.01
+
+  list_extraction:
+    response_html_selectors:
+      - kind: regex
+        expr: 'listData\s*:\s*''(\[[\s\S]*?\])'''
+    item_selectors:
+      - kind: jsonpath
+        expr: "$[*]"
+    link_selectors:
+      - kind: jsonpath
+        expr: $.url
+    title_selectors:
+      - kind: jsonpath
+        expr: $.title
+    date_selectors:
+      - kind: jsonpath
+        expr: $.updateTime
+    min_title_length: 8
+    fallback_auto: false
+
+  detail_extraction:
+    response_html_selectors: []
+    content_selectors:
+      - kind: xpath
+        expr: '//div[contains(@class, "detail-text")]'
+    fallback_auto: true
+    fallback_readability: true
+    min_content_length: 30
+
+  attachments:
+    enabled: false
+    selectors: []
+    allowed_extensions: []
+    max_bytes: 52428800
+
+  classification:
+    default_type: zhongbiao
+    zhongbiao_keywords: []
+
+  area_extraction:
+    enabled: true
+    use_title_first: true
+
+  output:
+    enabled: true
+    queue_zhaobiao: zhaobiao:result:zhaobiao
+    queue_zhongbiao: zhaobiao:result:zhongbiao
+    attachment_dir_zhaobiao: /root/pachong/zhaobiao/data/附件
+    attachment_dir_zhongbiao: /root/pachong/zhaobiao/data_zb/附件
