@@ -155,6 +155,8 @@ class ListExtractionConfig(BaseModel):
     link_selectors: List[Selector] = Field(default_factory=list)
     title_selectors: List[Selector] = Field(default_factory=list)
     date_selectors: List[Selector] = Field(default_factory=list)
+    # 列表条目自带地区字段（如接口 JSON 的 areaName）；命中时优先于标题/正文启发式地区提取
+    area_selectors: List[Selector] = Field(default_factory=list)
     detail_url_template: Optional[str] = None
     min_title_length: int = 8
     fallback_auto: bool = True
@@ -164,6 +166,10 @@ class DetailExtractionConfig(BaseModel):
     # 若详情响应是 JSON，且真正 HTML 正文在某个字段里，用这个先提取（例如 $.custom.custom.infoContent）
     response_html_selectors: List[Selector] = Field(default_factory=list)
     content_selectors: List[Selector] = Field(default_factory=list)
+    # 详情页完整标题选择器（列表标题被截断时回填；为空时用列表标题）
+    title_selectors: List[Selector] = Field(default_factory=list)
+    # 详情页发布时间选择器（列表无日期字段时回填；为空时用列表日期）
+    date_selectors: List[Selector] = Field(default_factory=list)
     fallback_auto: bool = True
     fallback_readability: bool = True
     min_content_length: int = 30

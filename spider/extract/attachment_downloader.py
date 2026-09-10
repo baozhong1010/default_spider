@@ -47,6 +47,8 @@ class AttachmentDownloader(object):
 
         output_files = []
         for i, url in enumerate(attachment_urls):
+            # 源站 href 文件名可能含未编码空格，urllib 会因此失败，统一编码为 %20
+            url = (url or "").replace(" ", "%20")
             name = ""
             if attachment_names and i < len(attachment_names):
                 name = attachment_names[i] or ""

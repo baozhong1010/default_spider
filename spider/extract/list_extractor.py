@@ -16,6 +16,7 @@ class ListItem:
     date: str
     source_url: str = ""
     raw_url: str = ""
+    area: str = ""
 
 
 class ListExtractor(object):
@@ -68,16 +69,20 @@ class ListExtractor(object):
             title_values = []  # type: List[str]
             link_values = []  # type: List[str]
             date_values = []  # type: List[str]
+            area_values = []  # type: List[str]
             for selector in self.cfg.title_selectors:
                 title_values.extend(apply_selector(selector=selector, context=node, html_text=html_text))
             for selector in self.cfg.link_selectors:
                 link_values.extend(apply_selector(selector=selector, context=node, html_text=html_text))
             for selector in self.cfg.date_selectors:
                 date_values.extend(apply_selector(selector=selector, context=node, html_text=html_text))
+            for selector in self.cfg.area_selectors:
+                area_values.extend(apply_selector(selector=selector, context=node, html_text=html_text))
 
             title = first_non_empty(title_values)
             link = first_non_empty(link_values)
             date = first_non_empty(date_values)
+            area = first_non_empty(area_values)
             if not title and link and isinstance(node, etree._Element):
                 title = first_non_empty(node.xpath(".//a/@title") + node.xpath(".//a//text()"))
             if not link and isinstance(node, etree._Element):
@@ -92,7 +97,16 @@ class ListExtractor(object):
                 continue
             if link.lower().startswith("javascript"):
                 continue
-            result.append(ListItem(title=title, url=resolve_url(base_url, link), raw_url=raw_link, date=normalize_space(date), source_url=""))
+            result.append(
+                ListItem(
+                    title=title,
+                    url=resolve_url(base_url, link),
+                    raw_url=raw_link,
+                    date=normalize_space(date),
+                    source_url="",
+                    area=normalize_space(area),
+                )
+            )
         return result
 
     def _format_detail_url(self, node, value):

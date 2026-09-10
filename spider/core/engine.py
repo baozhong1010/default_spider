@@ -23,7 +23,7 @@ from spider.pipeline.area import detect_area
 from spider.pipeline.classify import classify_bid_type
 from spider.pipeline.dedup import RedisDeduper
 from spider.pipeline.publisher import RedisPublisher
-from spider.utils.helpers import normalize_date_yyyy_mm_dd
+from spider.utils.helpers import normalize_date_yyyy_mm_dd, normalize_space
 from spider.utils.logging import log_event
 from spider.utils.metrics import SiteMetrics
 
@@ -383,6 +383,8 @@ class SpiderEngine(object):
             pdf_detection = pdf_detector.detect(resp.url, headers=resp.headers, html_text=resp.text)
             attachment_urls = []
             attachment_names = []
+            detail_title = ""
+            detail_date = ""
             pdf_content_used = False
 
             if pdf_detection.is_pdf_body and pdf_detection.pdf_url == resp.url:
@@ -411,6 +413,8 @@ class SpiderEngine(object):
                 content_html = parsed.content
                 attachment_urls = list(parsed.attachment_urls)
                 attachment_names = list(parsed.attachment_names)
+                detail_title = parsed.title
+                detail_date = parsed.date
                 content_text = detail_extractor.to_plain_text(content_html)
 
                 if len(content_text) < site.detail_extraction.min_content_length and pdf_detection.is_pdf_body and pdf_detection.pdf_url:
@@ -543,9 +547,11 @@ class SpiderEngine(object):
                 attachment_count=len(attachment_urls),
             )
 
-            bid_type = classify_bid_type(item.title, content_text, site.classification)
-            area = detect_area(item.title, content_text, site.area_extraction)
-            publish_date = normalize_date_yyyy_mm_dd(item.date, default_date=dt.date.today())
+            title = normalize_space(detail_title) or item.title
+            bid_type = classify_bid_type(title, content_text, site.classification)
+            item_area = normalize_space(getattr(item, "area", "") or "")
+            area = item_area or detect_area(title, content_text, site.area_extraction)
+            publish_date = normalize_date_yyyy_mm_dd(normalize_space(detail_date) or item.date, default_date=dt.date.today())
 
             attachment_files = await attachment_downloader.download_many(
                 attachment_urls=attachment_urls,
@@ -560,7 +566,7 @@ class SpiderEngine(object):
             )
 
             payload = {
-                "标题": item.title,
+                "标题": title,
                 "时间": publish_date,
                 "原文链接": item.url,
                 "附件": attachment_files,

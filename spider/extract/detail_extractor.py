@@ -16,6 +16,8 @@ class DetailExtractResult:
     content: str
     attachment_urls: List[str] = field(default_factory=list)
     attachment_names: List[str] = field(default_factory=list)
+    title: str = ""
+    date: str = ""
 
 
 class DetailExtractor(object):
@@ -31,6 +33,8 @@ class DetailExtractor(object):
         if tree is None:
             return DetailExtractResult(content="", attachment_urls=[])
 
+        detail_title = self._extract_title_by_rules(tree, content_html)
+        detail_date = self._extract_date_by_rules(tree, content_html)
         content = self._extract_content_by_rules(tree, content_html)
         if (not self.to_plain_text(content) or len(self.to_plain_text(content)) < self.detail_cfg.min_content_length) and self.detail_cfg.fallback_auto:
             content = self._extract_content_by_auto(tree)
@@ -39,7 +43,13 @@ class DetailExtractor(object):
 
         content = content.strip()
         attachment_urls, attachment_names = self._extract_attachments(tree, raw_text, base_url)
-        return DetailExtractResult(content=content, attachment_urls=attachment_urls, attachment_names=attachment_names)
+        return DetailExtractResult(
+            content=content,
+            attachment_urls=attachment_urls,
+            attachment_names=attachment_names,
+            title=detail_title,
+            date=detail_date,
+        )
 
     def _resolve_content_html(self, raw_text):
         # type: (str) -> str
@@ -67,6 +77,36 @@ class DetailExtractor(object):
             return normalize_space(content)
         return normalize_space("".join(tree.xpath("//text()")))
 
+    @staticmethod
+    def _strip_noise_nodes(node):
+        # type: (etree._Element) -> None
+        # 剥离 script/style/注释等非正文节点（如详情页把公告元信息写进 <script> 的情况）
+        try:
+            for bad in node.xpath(".//script | .//style | .//comment()"):
+                parent = bad.getparent()
+                if parent is not None:
+                    parent.remove(bad)
+        except Exception:
+            pass
+
+    def _extract_title_by_rules(self, tree, html_text):
+        # type: (etree._Element, str) -> str
+        for selector in self.detail_cfg.title_selectors:
+            values = apply_selector(selector=selector, context=tree, html_text=html_text)
+            title = first_non_empty(values)
+            if title:
+                return title
+        return ""
+
+    def _extract_date_by_rules(self, tree, html_text):
+        # type: (etree._Element, str) -> str
+        for selector in self.detail_cfg.date_selectors:
+            values = apply_selector(selector=selector, context=tree, html_text=html_text)
+            date_value = first_non_empty(values)
+            if date_value:
+                return date_value
+        return ""
+
     def _extract_content_by_rules(self, tree, html_text):
         # type: (etree._Element, str) -> str
         for selector in self.detail_cfg.content_selectors:
@@ -74,6 +114,7 @@ class DetailExtractor(object):
             if nodes:
                 node = nodes[0]
                 if isinstance(node, etree._Element):
+                    self._strip_noise_nodes(node)
                     return etree.tostring(node, encoding="unicode", method="html")
             values = apply_selector(selector=selector, context=tree, html_text=html_text)
             if values:
@@ -96,6 +137,7 @@ class DetailExtractor(object):
             score += 20 * len(node.xpath(".//p"))
             if score > best_score:
                 best_score = score
+                self._strip_noise_nodes(node)
                 best_html = etree.tostring(node, encoding="unicode", method="html")
         return best_html
 

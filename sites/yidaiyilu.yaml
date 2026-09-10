@@ -1,0 +1,109 @@
+# 中国一带一路网（www.yidaiyilu.gov.cn）——Nuxt SSR 新闻/资讯门户
+# 站点性质：共建"一带一路"官方信息平台，栏目为资讯/政策/项目/数据/服务/国别/专区，
+# 无「招标公告/中标公告/采购公告」等正式招投标公告栏目。
+# 唯一招投标相关栏目为「招投标信息」（/list/w/ztbxx，位于"项目"下），
+# 内容为新闻式「中标」信息（中国企业中标海外"一带一路"项目的简讯），约 95% 为中标类，
+# 个别为招标类或项目动态类。故按「中标」栏目处理（default_type: zhongbiao）。
+#
+# 列表页：静态 SSR HTML，结构 <div class="listPage_6"><ul class="fontZoom"><li><a href title><i></i>标题</a></li>…</ul></div>
+#   注意：<li> 内无日期（Vue 空条件渲染为 <!---->），日期仅在页面内嵌 window.__NUXT__ 的 ol_data6_json 数组里，
+#   且该数组经 Nuxt 去重序列化（date:H / date:A 变量引用，非合法 JSON），框架 Selector 无法解析。
+#   已用 detail_extraction.date_selectors 从详情页「发布时间」回填真实日期。
+# 分页：?page=N（1 起，共 5 页，前 3 页均为中标类）。
+# 详情页：列表链接混合两类——新式 /p/<id>.html 与旧式 /xwzx/hwxw/<id>.htm、/qyfc/zqzx/<id>.htm（302 跳转到 /p/<id>.html），
+#   urllib 自动跟随重定向。正文容器 div.news-details-content，标题 h1.news-details-title。
+# 附件：详情正文为纯 <p> 文本，无附件下载链接，故禁用附件抓取。
+# 地区：项目为境外（一带一路沿线国家），省份关键词无法匹配且易误命中公司名（如"天津电建"），故禁用地区提取。
+
+- id: ydy_ztbxx
+  enabled: true
+  name: 一带一路网-招投标信息
+  entry_urls:
+    - https://www.yidaiyilu.gov.cn/list/w/ztbxx
+
+  schedule:
+    enabled: true
+    interval_seconds: 3600
+
+  limits:
+    max_concurrency: 3
+    request_interval_seconds: 0.5
+
+  request:
+    method: GET
+    headers:
+      Referer: https://www.yidaiyilu.gov.cn/list/w/ztbxx
+      Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8
+    params: {}
+    timeout_seconds: 40
+    retries: 2
+    retry_backoff_seconds: 0.8
+    verify_ssl: false
+    # 本机 Python 3.6 自带 OpenSSL 1.0.2q，与该站 TLS 握手失败（Remote end closed connection），
+    # curl/Chrome 正常（站支持 TLS1.2）。改用无头 Chrome 抓取列表与详情页。
+    use_chrome: true
+
+  pagination:
+    mode: url_template
+    start_page: 1
+    end_page: 3
+    url_template: "{base_url}?page={page}"
+
+  cookie:
+    enabled: false
+
+  dedup:
+    redis_hash_key: zhaobiao:domian:linkqc
+    ttl_days: 30
+    prune_probability: 0.01
+
+  list_extraction:
+    response_html_selectors: []
+    item_selectors:
+      - kind: xpath
+        expr: //div[contains(@class,"listPage_6")]//ul/li
+    link_selectors:
+      - kind: xpath
+        expr: .//a/@href
+    title_selectors:
+      - kind: xpath
+        expr: .//a/@title
+    date_selectors: []
+    min_title_length: 8
+    fallback_auto: false
+
+  detail_extraction:
+    response_html_selectors: []
+    content_selectors:
+      - kind: xpath
+        expr: //div[contains(@class,"news-details-content")]
+    title_selectors:
+      - kind: xpath
+        expr: //h1[contains(@class,"news-details-title")]//text()
+    date_selectors:
+      - kind: xpath
+        expr: //div[contains(@class,"news-details-desc")]//span[contains(., "发布时间")]//text()
+    fallback_auto: true
+    fallback_readability: true
+    min_content_length: 30
+
+  attachments:
+    enabled: false
+    selectors: []
+    allowed_extensions: []
+    max_bytes: 52428800
+
+  classification:
+    default_type: zhongbiao
+    zhongbiao_keywords: []
+
+  area_extraction:
+    enabled: false
+    use_title_first: true
+
+  output:
+    enabled: true
+    queue_zhaobiao: zhaobiao:result:zhaobiao
+    queue_zhongbiao: zhaobiao:result:zhongbiao
+    attachment_dir_zhaobiao: /root/pachong/zhaobiao/data/附件
+    attachment_dir_zhongbiao: /root/pachong/zhaobiao/data_zb/附件

@@ -1,0 +1,392 @@
+# 中国国际招标网（chinabidding.mofcom.gov.cn）机电产品国际招标行政监督和公共服务平台
+# 首页/channel/business/bulletinList.shtml 为 JS 动态列表，实际数据走 AJAX POST 接口：
+#   POST https://chinabidding.mofcom.gov.cn/zbwcms/front/bidding/bulletinInfoList
+#   表单字段：pageNumber/keyWord/timeType/rangeCode/typeCode/capitalSourceCode/industryCode/provinceCode
+#   返回 JSON：{maxPageNum, pageNumber, pageSize, rows:[{name, filePath, publishTime, areaName, ...}]}
+# 项目分类 typeCode：1=招标公告，2=招标变更公告，3=评标结果公示，4=中标结果公告
+# 详情链接：https://chinabidding.mofcom.gov.cn/bidDetail + rows[].filePath（静态 HTML，正文在 div.article）
+# 附件：正文 div.article 内的 li.files > a（如 .xls/.pdf），可匿名直接下载。
+
+- id: mofcom_zbgg
+  enabled: true
+  name: 中国国际招标网-招标公告
+  entry_urls:
+    - https://chinabidding.mofcom.gov.cn/zbwcms/front/bidding/bulletinInfoList
+
+  schedule:
+    enabled: true
+    interval_seconds: 3600
+
+  limits:
+    max_concurrency: 3
+    request_interval_seconds: 0.5
+
+  request:
+    method: POST
+    headers:
+      Referer: https://chinabidding.mofcom.gov.cn/channel/business/bulletinList.shtml
+      Accept: application/json, text/javascript, */*; q=0.01
+      X-Requested-With: XMLHttpRequest
+    params: {}
+    timeout_seconds: 40
+    retries: 2
+    retry_backoff_seconds: 0.8
+    verify_ssl: false
+
+  pagination:
+    mode: data_template
+    start_page: 1
+    end_page: 3
+    data_template: "pageNumber={page}&keyWord=&timeType=&rangeCode=&typeCode=1&capitalSourceCode=&industryCode=&provinceCode="
+
+  cookie:
+    enabled: false
+
+  dedup:
+    redis_hash_key: zhaobiao:domian:linkqc
+    ttl_days: 30
+    prune_probability: 0.01
+
+  list_extraction:
+    response_html_selectors: []
+    item_selectors:
+      - kind: jsonpath
+        expr: $.rows[*]
+    link_selectors:
+      - kind: jsonpath
+        expr: $.filePath
+    title_selectors:
+      - kind: jsonpath
+        expr: $.name
+    date_selectors:
+      - kind: jsonpath
+        expr: $.publishTime
+    area_selectors:
+      - kind: jsonpath
+        expr: $.areaName
+    detail_url_template: "https://chinabidding.mofcom.gov.cn/bidDetail{value}"
+    min_title_length: 8
+    fallback_auto: false
+
+  detail_extraction:
+    response_html_selectors: []
+    content_selectors:
+      - kind: xpath
+        expr: //div[contains(@class, "article")]
+    fallback_auto: true
+    fallback_readability: true
+    min_content_length: 30
+
+  attachments:
+    enabled: true
+    selectors:
+      - kind: xpath
+        expr: //div[contains(@class, "article")]//a/@href
+    filename_selectors:
+      - kind: xpath
+        expr: //div[contains(@class, "article")]//a//text()
+    allowed_extensions: []
+    max_bytes: 52428800
+
+  classification:
+    default_type: zhaobiao
+    zhongbiao_keywords: []
+
+  area_extraction:
+    enabled: true
+    use_title_first: true
+
+  output:
+    enabled: true
+    queue_zhaobiao: zhaobiao:result:zhaobiao
+    queue_zhongbiao: zhaobiao:result:zhongbiao
+    attachment_dir_zhaobiao: /root/pachong/zhaobiao/data/附件
+    attachment_dir_zhongbiao: /root/pachong/zhaobiao/data_zb/附件
+
+- id: mofcom_zbjg
+  enabled: true
+  name: 中国国际招标网-中标结果公告
+  entry_urls:
+    - https://chinabidding.mofcom.gov.cn/zbwcms/front/bidding/bulletinInfoList
+
+  schedule:
+    enabled: true
+    interval_seconds: 3600
+
+  limits:
+    max_concurrency: 3
+    request_interval_seconds: 0.5
+
+  request:
+    method: POST
+    headers:
+      Referer: https://chinabidding.mofcom.gov.cn/channel/business/bulletinList.shtml
+      Accept: application/json, text/javascript, */*; q=0.01
+      X-Requested-With: XMLHttpRequest
+    params: {}
+    timeout_seconds: 40
+    retries: 2
+    retry_backoff_seconds: 0.8
+    verify_ssl: false
+
+  pagination:
+    mode: data_template
+    start_page: 1
+    end_page: 3
+    data_template: "pageNumber={page}&keyWord=&timeType=&rangeCode=&typeCode=4&capitalSourceCode=&industryCode=&provinceCode="
+
+  cookie:
+    enabled: false
+
+  dedup:
+    redis_hash_key: zhaobiao:domian:linkqc
+    ttl_days: 30
+    prune_probability: 0.01
+
+  list_extraction:
+    response_html_selectors: []
+    item_selectors:
+      - kind: jsonpath
+        expr: $.rows[*]
+    link_selectors:
+      - kind: jsonpath
+        expr: $.filePath
+    title_selectors:
+      - kind: jsonpath
+        expr: $.name
+    date_selectors:
+      - kind: jsonpath
+        expr: $.publishTime
+    area_selectors:
+      - kind: jsonpath
+        expr: $.areaName
+    detail_url_template: "https://chinabidding.mofcom.gov.cn/bidDetail{value}"
+    min_title_length: 8
+    fallback_auto: false
+
+  detail_extraction:
+    response_html_selectors: []
+    content_selectors:
+      - kind: xpath
+        expr: //div[contains(@class, "article")]
+    fallback_auto: true
+    fallback_readability: true
+    min_content_length: 30
+
+  attachments:
+    enabled: true
+    selectors:
+      - kind: xpath
+        expr: //div[contains(@class, "article")]//a/@href
+    filename_selectors:
+      - kind: xpath
+        expr: //div[contains(@class, "article")]//a//text()
+    allowed_extensions: []
+    max_bytes: 52428800
+
+  classification:
+    default_type: zhongbiao
+    zhongbiao_keywords: []
+
+  area_extraction:
+    enabled: true
+    use_title_first: true
+
+  output:
+    enabled: true
+    queue_zhaobiao: zhaobiao:result:zhaobiao
+    queue_zhongbiao: zhaobiao:result:zhongbiao
+    attachment_dir_zhaobiao: /root/pachong/zhaobiao/data/附件
+    attachment_dir_zhongbiao: /root/pachong/zhaobiao/data_zb/附件
+
+- id: mofcom_bggg
+  enabled: true
+  name: 中国国际招标网-招标变更公告
+  entry_urls:
+    - https://chinabidding.mofcom.gov.cn/zbwcms/front/bidding/bulletinInfoList
+
+  schedule:
+    enabled: true
+    interval_seconds: 3600
+
+  limits:
+    max_concurrency: 3
+    request_interval_seconds: 0.5
+
+  request:
+    method: POST
+    headers:
+      Referer: https://chinabidding.mofcom.gov.cn/channel/business/bulletinList.shtml
+      Accept: application/json, text/javascript, */*; q=0.01
+      X-Requested-With: XMLHttpRequest
+    params: {}
+    timeout_seconds: 40
+    retries: 2
+    retry_backoff_seconds: 0.8
+    verify_ssl: false
+
+  pagination:
+    mode: data_template
+    start_page: 1
+    end_page: 3
+    data_template: "pageNumber={page}&keyWord=&timeType=&rangeCode=&typeCode=2&capitalSourceCode=&industryCode=&provinceCode="
+
+  cookie:
+    enabled: false
+
+  dedup:
+    redis_hash_key: zhaobiao:domian:linkqc
+    ttl_days: 30
+    prune_probability: 0.01
+
+  list_extraction:
+    response_html_selectors: []
+    item_selectors:
+      - kind: jsonpath
+        expr: $.rows[*]
+    link_selectors:
+      - kind: jsonpath
+        expr: $.filePath
+    title_selectors:
+      - kind: jsonpath
+        expr: $.name
+    date_selectors:
+      - kind: jsonpath
+        expr: $.publishTime
+    area_selectors:
+      - kind: jsonpath
+        expr: $.areaName
+    detail_url_template: "https://chinabidding.mofcom.gov.cn/bidDetail{value}"
+    min_title_length: 8
+    fallback_auto: false
+
+  detail_extraction:
+    response_html_selectors: []
+    content_selectors:
+      - kind: xpath
+        expr: //div[contains(@class, "article")]
+    fallback_auto: true
+    fallback_readability: true
+    min_content_length: 30
+
+  attachments:
+    enabled: true
+    selectors:
+      - kind: xpath
+        expr: //div[contains(@class, "article")]//a/@href
+    filename_selectors:
+      - kind: xpath
+        expr: //div[contains(@class, "article")]//a//text()
+    allowed_extensions: []
+    max_bytes: 52428800
+
+  classification:
+    default_type: zhaobiao
+    zhongbiao_keywords: []
+
+  area_extraction:
+    enabled: true
+    use_title_first: true
+
+  output:
+    enabled: true
+    queue_zhaobiao: zhaobiao:result:zhaobiao
+    queue_zhongbiao: zhaobiao:result:zhongbiao
+    attachment_dir_zhaobiao: /root/pachong/zhaobiao/data/附件
+    attachment_dir_zhongbiao: /root/pachong/zhaobiao/data_zb/附件
+
+- id: mofcom_pbjg
+  enabled: true
+  name: 中国国际招标网-评标结果公示
+  entry_urls:
+    - https://chinabidding.mofcom.gov.cn/zbwcms/front/bidding/bulletinInfoList
+
+  schedule:
+    enabled: true
+    interval_seconds: 3600
+
+  limits:
+    max_concurrency: 3
+    request_interval_seconds: 0.5
+
+  request:
+    method: POST
+    headers:
+      Referer: https://chinabidding.mofcom.gov.cn/channel/business/bulletinList.shtml
+      Accept: application/json, text/javascript, */*; q=0.01
+      X-Requested-With: XMLHttpRequest
+    params: {}
+    timeout_seconds: 40
+    retries: 2
+    retry_backoff_seconds: 0.8
+    verify_ssl: false
+
+  pagination:
+    mode: data_template
+    start_page: 1
+    end_page: 3
+    data_template: "pageNumber={page}&keyWord=&timeType=&rangeCode=&typeCode=3&capitalSourceCode=&industryCode=&provinceCode="
+
+  cookie:
+    enabled: false
+
+  dedup:
+    redis_hash_key: zhaobiao:domian:linkqc
+    ttl_days: 30
+    prune_probability: 0.01
+
+  list_extraction:
+    response_html_selectors: []
+    item_selectors:
+      - kind: jsonpath
+        expr: $.rows[*]
+    link_selectors:
+      - kind: jsonpath
+        expr: $.filePath
+    title_selectors:
+      - kind: jsonpath
+        expr: $.name
+    date_selectors:
+      - kind: jsonpath
+        expr: $.publishTime
+    area_selectors:
+      - kind: jsonpath
+        expr: $.areaName
+    detail_url_template: "https://chinabidding.mofcom.gov.cn/bidDetail{value}"
+    min_title_length: 8
+    fallback_auto: false
+
+  detail_extraction:
+    response_html_selectors: []
+    content_selectors:
+      - kind: xpath
+        expr: //div[contains(@class, "article")]
+    fallback_auto: true
+    fallback_readability: true
+    min_content_length: 30
+
+  attachments:
+    enabled: true
+    selectors:
+      - kind: xpath
+        expr: //div[contains(@class, "article")]//a/@href
+    filename_selectors:
+      - kind: xpath
+        expr: //div[contains(@class, "article")]//a//text()
+    allowed_extensions: []
+    max_bytes: 52428800
+
+  classification:
+    default_type: zhongbiao
+    zhongbiao_keywords: []
+
+  area_extraction:
+    enabled: true
+    use_title_first: true
+
+  output:
+    enabled: true
+    queue_zhaobiao: zhaobiao:result:zhaobiao
+    queue_zhongbiao: zhaobiao:result:zhongbiao
+    attachment_dir_zhaobiao: /root/pachong/zhaobiao/data/附件
+    attachment_dir_zhongbiao: /root/pachong/zhaobiao/data_zb/附件
