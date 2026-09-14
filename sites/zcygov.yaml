@@ -1,0 +1,594 @@
+﻿# 政采云平台（zcygov.cn）两个站点，同一文件维护：
+#   A. 政采云-竞价（jc.zcygov.cn，入口会跳转到 www.jc.zcygov.cn / 业务域 jc-jj.jc.zcygov.cn）
+#   B. 政采云-贵州分站（www.guizhou.zcygov.cn，公告业务域 gggs.guizhou.zcygov.cn）
+#
+# 站点性质：均为 Vue 单页应用（lego/lowcode 模板），HTML 骨架里没有列表数据，
+# 列表/详情全部走 JSON 接口，因此配置直接对接接口（curl/Python urllib 均可直连，无需 Chrome）。
+#
+# 列表发布时间：两个站的接口只给毫秒时间戳（pubTimestamp / releasedAt），框架
+#   normalize_date_yyyy_mm_dd 无法解析 13 位数字（会误当成年月日，得到 1789-xx-xx 之类
+#   的假日期），故 list_extraction.date_selectors 一律留空，改由详情接口的
+#   releasedAt（JC，已是 "YYYY-MM-DD HH:MM:SS"）或详情正文里的日期串（贵州）回填；
+#   若详情取不到则回落为运行当天日期。
+# 注意：detail_extraction 里的 jsonpath/regex 选择器，其 html_text 参数是
+#   _resolve_content_html() 的结果——一旦配了 response_html_selectors，后续 title/date
+#   选择器拿到的就是被挑出来的那段 HTML 而不是原始 JSON。因此：
+#   · 竞价站（详情是 JSON）不配 response_html_selectors，正文用 content_selectors 的
+#     jsonpath 直接取 $.result.content，这样 title/date 的 jsonpath 才能读到原始 JSON；
+#   · 贵州站（需要正文 HTML 里的 <a> 做附件、且日期用 regex 从正文里取）才配
+#     response_html_selectors，标题回落用列表标题（列表标题即完整标题）。
+#
+# ---------- A. 竞价站接口 ----------
+# 列表（采购/竞价公告）：POST https://jc-jj.jc.zcygov.cn/front/api/sparta/announcement/listNewest
+#   body: {pageNo, pageSize, tradeStyles, stateList, instanceCodes, sortField, sortMethod,
+#          publishStartTime, publishEndTime, ...}
+#   resp: {success, result:{total, list:[{requisitionId, title, pubTimestamp, type,
+#          provinceName, cityName, orgName, ...}]}}
+# 列表（结果公告）：POST https://jc-jj.jc.zcygov.cn/front/api/sparta/announcement/listResult
+#   同结构；item.type 为 BIDDING_COMPLETED（成交结果）/ BIDDING_FAILED（终止结果）。
+# 详情：GET https://jc-jj.jc.zcygov.cn/api/sparta/announcement/detail?requisitionId={id}&type={type}
+#   type 必填（缺省会返回「公告类型错误」，填错类型会返回同项目的另一篇公告），因此
+#   detail_url_template 同时引用列表 item 的 requisitionId 与 type（框架 _format_detail_url
+#   支持用 JSON item 的任意字段做占位符）。
+#   resp.result.releasedAt 是格式化好的 "YYYY-MM-DD HH:MM:SS"，可直接作为发布时间。
+#   resp.result.attachments 是数组：[{attachmentName, attachmentPath, size, url}]
+#   （url 指向 jc-gov-open-doc.oss-... 可直接匿名下载）。
+#   ⚠ 该站详情页 /luban/bidding/detail?... 是纯前端 SPA（HTML 外壳里没有正文，也没有
+#   __INITIAL_STATE__ 正文），服务端抓不到正文，所以「原文链接」直接落接口地址
+#   （接口返回整篇公告正文，公开可匿名访问；用浏览器打开 SPA 页需带 JS 渲染）。
+# 注意：publishStartTime/publishEndTime 传 null 表示不限时间，按发布时间倒序取最新若干页。
+#
+# ---------- B. 贵州站接口 ----------
+# 公告公示列表：POST https://gggs.guizhou.zcygov.cn/announcement/lobby/queryPage
+#   body: {pageSize, pageNo, announcementTypes:[...], district, extendThird:{blackList,whiteList}}
+#   resp: {success, result:{total, data:[{id, title, districtName, announcementType,
+#          announcementTypeName, projectCode, encryptId, releasedAt, content(整篇正文 HTML), ...}]}}
+#   栏目 typeId（由页面左侧菜单点击抓包确认）：邀请公告=8018；成交公告=8020,8025,8026,8013；
+#   终止公告=8022；验收公告=8016,8021（未采）。district 传空串=全省（含市/区县），
+#   传 "529900" 仅省本级；district 与 extendThird 白名单不能同时为空。
+#   列表接口已返回整篇正文 content，但详情仍按框架流程用 announcementIds 精确回查单条。
+# 详情：GET https://gggs.guizhou.zcygov.cn/announcement/lobby/getAnnouncementDetail?encryptId=xxx
+#   该接口只接受 encryptId，且 encryptId 是标准 base64（含 + / =），直接拼进 query 会被
+#   服务端把 "+" 解成空格导致「公告ID不合法」；框架的 detail_url_template 不做 URL 编码，
+#   故详情改用 POST queryPage + {"announcementIds":["{link}"]} 精确命中（已实测 n=1 且不会
+#   像 projectCode 那样在一个项目有多篇公告时取错）。列表原文链接仍拼成可读的 detail 页地址。
+#   正文 HTML 在 $.result.data[0].content；发布时间用详情响应里的日期串 regex 回填
+#  （成交公告=「成交日期: 2026年9月11日」，邀请/终止公告=「报价起止时间: 2026-09-11 ...」），
+#   因为接口里的 releasedAt 是毫秒时间戳，框架 normalize_date_yyyy_mm_dd 无法解析。
+# 附件：正文 HTML 内的 <a href> 指向 gz-gov-open-doc.oss-... 的 xlsx/doc/docx 等文件。
+
+# ==================== A. 政采云-竞价 ====================
+
+- id: zcy_jc_jjgg
+  enabled: true
+  name: 政采云-竞价-采购公告
+  entry_urls:
+    - https://jc-jj.jc.zcygov.cn/front/api/sparta/announcement/listNewest
+
+  schedule:
+    enabled: true
+    interval_seconds: 3600
+
+  limits:
+    max_concurrency: 3
+    request_interval_seconds: 0.5
+
+  request:
+    method: POST
+    headers:
+      Content-Type: application/json;charset=UTF-8
+      Accept: application/json, text/plain, */*
+      X-Requested-With: XMLHttpRequest
+      Referer: https://jc-jj.jc.zcygov.cn/luban/bidding/newest
+    params: {}
+    timeout_seconds: 40
+    retries: 2
+    retry_backoff_seconds: 0.8
+    verify_ssl: false
+
+  pagination:
+    mode: json_template
+    start_page: 1
+    end_page: 3
+    json_template: '{"backCategoryName":"","categoryType":null,"tradingMethod":"","pageNo":{page},"pageSize":16,"tradeStyles":["BIDDING","REVERSE","SECOND_BIDDING"],"stateList":[3,4,5,6,7,10,12,50],"otherSearch":"","instanceCodes":["JCJJ","ZJJQCG","JCFP","JCYLG","JCZXJJ"],"sortField":"ANNOUNCEMENT_PUBLISH_TIME","sortMethod":"DESC","districtCodeList":[],"administrativeDistrictCodeList":[],"publishStartTime":null,"publishEndTime":null}'
+
+  cookie:
+    enabled: false
+
+  dedup:
+    redis_hash_key: zhaobiao:domian:linkqc
+    ttl_days: 30
+    prune_probability: 0.01
+
+  list_extraction:
+    response_html_selectors: []
+    item_selectors:
+      - kind: jsonpath
+        expr: $.result.list[*]
+    link_selectors:
+      - kind: jsonpath
+        expr: $.requisitionId
+    title_selectors:
+      - kind: jsonpath
+        expr: $.title
+    date_selectors: []
+    area_selectors:
+      - kind: jsonpath
+        expr: $.provinceName
+    detail_url_template: "https://jc-jj.jc.zcygov.cn/api/sparta/announcement/detail?requisitionId={requisitionId}&type={type}"
+    min_title_length: 5
+    fallback_auto: false
+
+  detail_extraction:
+    response_html_selectors: []
+    content_selectors:
+      - kind: jsonpath
+        expr: $.result.content
+    title_selectors:
+      - kind: jsonpath
+        expr: $.result.title
+    date_selectors:
+      - kind: jsonpath
+        expr: $.result.releasedAt
+    fallback_auto: true
+    fallback_readability: true
+    min_content_length: 30
+
+  attachments:
+    enabled: true
+    selectors:
+      - kind: jsonpath
+        expr: $.result.attachments[*].url
+    filename_selectors:
+      - kind: jsonpath
+        expr: $.result.attachments[*].attachmentName
+    allowed_extensions: []
+    max_bytes: 52428800
+
+  classification:
+    default_type: zhaobiao
+    zhongbiao_keywords: []
+
+  area_extraction:
+    enabled: true
+    use_title_first: true
+
+  output:
+    enabled: true
+    queue_zhaobiao: zhaobiao:result:zhaobiao
+    queue_zhongbiao: zhaobiao:result:zhongbiao
+    attachment_dir_zhaobiao: /root/pachong/zhaobiao/data/附件
+    attachment_dir_zhongbiao: /root/pachong/zhaobiao/data_zb/附件
+
+- id: zcy_jc_jggg
+  enabled: true
+  name: 政采云-竞价-结果公告
+  entry_urls:
+    - https://jc-jj.jc.zcygov.cn/front/api/sparta/announcement/listResult
+
+  schedule:
+    enabled: true
+    interval_seconds: 3600
+
+  limits:
+    max_concurrency: 3
+    request_interval_seconds: 0.5
+
+  request:
+    method: POST
+    headers:
+      Content-Type: application/json;charset=UTF-8
+      Accept: application/json, text/plain, */*
+      X-Requested-With: XMLHttpRequest
+      Referer: https://jc-jj.jc.zcygov.cn/bidding/result
+    params: {}
+    timeout_seconds: 40
+    retries: 2
+    retry_backoff_seconds: 0.8
+    verify_ssl: false
+
+  pagination:
+    mode: json_template
+    start_page: 1
+    end_page: 3
+    json_template: '{"backCategoryName":"","categoryType":null,"pageNo":{page},"pageSize":16,"tradeStyles":["BIDDING","REVERSE","SECOND_BIDDING"],"stateList":[12,6,7],"otherSearch":"","districtCodeList":[],"sortField":"GMT_MODIFIED","instanceCodes":["ZJJQCG","JCFP","JCJJ","JCJYCG","JCYLG","JCZXJJ"],"administrativeDistrictCodeList":[],"sortMethod":"DESC","publishStartTime":null,"publishEndTime":null}'
+
+  cookie:
+    enabled: false
+
+  dedup:
+    redis_hash_key: zhaobiao:domian:linkqc
+    ttl_days: 30
+    prune_probability: 0.01
+
+  list_extraction:
+    response_html_selectors: []
+    item_selectors:
+      - kind: jsonpath
+        expr: $.result.list[*]
+    link_selectors:
+      - kind: jsonpath
+        expr: $.requisitionId
+    title_selectors:
+      - kind: jsonpath
+        expr: $.title
+    date_selectors: []
+    area_selectors:
+      - kind: jsonpath
+        expr: $.provinceName
+    detail_url_template: "https://jc-jj.jc.zcygov.cn/api/sparta/announcement/detail?requisitionId={requisitionId}&type={type}"
+    min_title_length: 5
+    fallback_auto: false
+
+  detail_extraction:
+    response_html_selectors: []
+    content_selectors:
+      - kind: jsonpath
+        expr: $.result.content
+    title_selectors:
+      - kind: jsonpath
+        expr: $.result.title
+    date_selectors:
+      - kind: jsonpath
+        expr: $.result.releasedAt
+    fallback_auto: true
+    fallback_readability: true
+    min_content_length: 30
+
+  attachments:
+    enabled: true
+    selectors:
+      - kind: jsonpath
+        expr: $.result.attachments[*].url
+    filename_selectors:
+      - kind: jsonpath
+        expr: $.result.attachments[*].attachmentName
+    allowed_extensions: []
+    max_bytes: 52428800
+
+  classification:
+    default_type: zhongbiao
+    zhongbiao_keywords: []
+
+  area_extraction:
+    enabled: true
+    use_title_first: true
+
+  output:
+    enabled: true
+    queue_zhaobiao: zhaobiao:result:zhaobiao
+    queue_zhongbiao: zhaobiao:result:zhongbiao
+    attachment_dir_zhaobiao: /root/pachong/zhaobiao/data/附件
+    attachment_dir_zhongbiao: /root/pachong/zhaobiao/data_zb/附件
+
+# ==================== B. 政采云-贵州分站 ====================
+
+- id: zcy_gz_yqgg
+  enabled: true
+  name: 政采云-贵州-邀请公告(采购公告)
+  entry_urls:
+    - https://gggs.guizhou.zcygov.cn/announcement/lobby/queryPage
+
+  schedule:
+    enabled: true
+    interval_seconds: 3600
+
+  limits:
+    max_concurrency: 3
+    request_interval_seconds: 0.5
+
+  request:
+    method: POST
+    headers:
+      Content-Type: application/json;charset=UTF-8
+      Accept: application/json, text/plain, */*
+      X-Requested-With: XMLHttpRequest
+      Referer: https://gggs.guizhou.zcygov.cn/luban/announcement/list
+    params: {}
+    timeout_seconds: 40
+    retries: 2
+    retry_backoff_seconds: 0.8
+    verify_ssl: false
+
+  pagination:
+    mode: json_template
+    start_page: 1
+    end_page: 3
+    json_template: '{"pageSize":15,"pageNo":{page},"announcementTypes":[8018],"district":"","extendThird":{"blackList":[],"whiteList":["GSWSCS","GZXYGH","GZZXXJ","GZDDCG","GZQCG","GZFXJJ"]}}'
+
+  cookie:
+    enabled: false
+
+  dedup:
+    redis_hash_key: zhaobiao:domian:linkqc
+    ttl_days: 30
+    prune_probability: 0.01
+
+  list_extraction:
+    response_html_selectors: []
+    item_selectors:
+      - kind: jsonpath
+        expr: $.result.data[*]
+    link_selectors:
+      - kind: jsonpath
+        expr: $.id
+    title_selectors:
+      - kind: jsonpath
+        expr: $.title
+    date_selectors: []
+    area_selectors:
+      - kind: jsonpath
+        expr: $.districtName
+    detail_url_template: "https://gggs.guizhou.zcygov.cn/luban/announcement/detail?encryptId={encryptId}"
+    min_title_length: 5
+    fallback_auto: false
+
+  detail_request:
+    method: POST
+    url: https://gggs.guizhou.zcygov.cn/announcement/lobby/queryPage
+    body_template: '{"announcementIds":["{link}"],"pageSize":1,"pageNo":1,"district":"","extendThird":{"blackList":[],"whiteList":["GSWSCS","GZXYGH","GZZXXJ","GZDDCG","GZQCG","GZFXJJ"]}}'
+
+  detail_extraction:
+    response_html_selectors:
+      - kind: jsonpath
+        expr: $.result.data[0].content
+    content_selectors:
+      - kind: xpath
+        expr: //body
+    title_selectors:
+      - kind: jsonpath
+        expr: $.result.data[0].title
+    date_selectors:
+      - kind: regex
+        expr: '(\d{4}年\d{1,2}月\d{1,2}日)'
+      - kind: regex
+        expr: '(\d{4}-\d{1,2}-\d{1,2})'
+    fallback_auto: true
+    fallback_readability: true
+    min_content_length: 30
+
+  attachments:
+    enabled: true
+    selectors:
+      - kind: xpath
+        expr: //a/@href
+    filename_selectors:
+      - kind: xpath
+        expr: //a//text()
+    allowed_extensions: [".pdf", ".doc", ".docx", ".xls", ".xlsx", ".zip", ".rar", ".txt"]
+    max_bytes: 52428800
+
+  classification:
+    default_type: zhaobiao
+    zhongbiao_keywords: []
+
+  area_extraction:
+    enabled: true
+    use_title_first: true
+
+  output:
+    enabled: true
+    queue_zhaobiao: zhaobiao:result:zhaobiao
+    queue_zhongbiao: zhaobiao:result:zhongbiao
+    attachment_dir_zhaobiao: /root/pachong/zhaobiao/data/附件
+    attachment_dir_zhongbiao: /root/pachong/zhaobiao/data_zb/附件
+
+- id: zcy_gz_cjgg
+  enabled: true
+  name: 政采云-贵州-成交公告
+  entry_urls:
+    - https://gggs.guizhou.zcygov.cn/announcement/lobby/queryPage
+
+  schedule:
+    enabled: true
+    interval_seconds: 3600
+
+  limits:
+    max_concurrency: 3
+    request_interval_seconds: 0.5
+
+  request:
+    method: POST
+    headers:
+      Content-Type: application/json;charset=UTF-8
+      Accept: application/json, text/plain, */*
+      X-Requested-With: XMLHttpRequest
+      Referer: https://gggs.guizhou.zcygov.cn/luban/announcement/list
+    params: {}
+    timeout_seconds: 40
+    retries: 2
+    retry_backoff_seconds: 0.8
+    verify_ssl: false
+
+  pagination:
+    mode: json_template
+    start_page: 1
+    end_page: 3
+    json_template: '{"pageSize":15,"pageNo":{page},"announcementTypes":[8020,8025,8026,8013],"district":"","extendThird":{"blackList":[],"whiteList":["GSWSCS","GZXYGH","GZZXXJ","GZDDCG","GZQCG","GZFXJJ"]}}'
+
+  cookie:
+    enabled: false
+
+  dedup:
+    redis_hash_key: zhaobiao:domian:linkqc
+    ttl_days: 30
+    prune_probability: 0.01
+
+  list_extraction:
+    response_html_selectors: []
+    item_selectors:
+      - kind: jsonpath
+        expr: $.result.data[*]
+    link_selectors:
+      - kind: jsonpath
+        expr: $.id
+    title_selectors:
+      - kind: jsonpath
+        expr: $.title
+    date_selectors: []
+    area_selectors:
+      - kind: jsonpath
+        expr: $.districtName
+    detail_url_template: "https://gggs.guizhou.zcygov.cn/luban/announcement/detail?encryptId={encryptId}"
+    min_title_length: 5
+    fallback_auto: false
+
+  detail_request:
+    method: POST
+    url: https://gggs.guizhou.zcygov.cn/announcement/lobby/queryPage
+    body_template: '{"announcementIds":["{link}"],"pageSize":1,"pageNo":1,"district":"","extendThird":{"blackList":[],"whiteList":["GSWSCS","GZXYGH","GZZXXJ","GZDDCG","GZQCG","GZFXJJ"]}}'
+
+  detail_extraction:
+    response_html_selectors:
+      - kind: jsonpath
+        expr: $.result.data[0].content
+    content_selectors:
+      - kind: xpath
+        expr: //body
+    title_selectors:
+      - kind: jsonpath
+        expr: $.result.data[0].title
+    date_selectors:
+      - kind: regex
+        expr: '(\d{4}年\d{1,2}月\d{1,2}日)'
+      - kind: regex
+        expr: '(\d{4}-\d{1,2}-\d{1,2})'
+    fallback_auto: true
+    fallback_readability: true
+    min_content_length: 30
+
+  attachments:
+    enabled: true
+    selectors:
+      - kind: xpath
+        expr: //a/@href
+    filename_selectors:
+      - kind: xpath
+        expr: //a//text()
+    allowed_extensions: [".pdf", ".doc", ".docx", ".xls", ".xlsx", ".zip", ".rar", ".txt"]
+    max_bytes: 52428800
+
+  classification:
+    default_type: zhongbiao
+    zhongbiao_keywords: []
+
+  area_extraction:
+    enabled: true
+    use_title_first: true
+
+  output:
+    enabled: true
+    queue_zhaobiao: zhaobiao:result:zhaobiao
+    queue_zhongbiao: zhaobiao:result:zhongbiao
+    attachment_dir_zhaobiao: /root/pachong/zhaobiao/data/附件
+    attachment_dir_zhongbiao: /root/pachong/zhaobiao/data_zb/附件
+
+- id: zcy_gz_zzgg
+  enabled: true
+  name: 政采云-贵州-终止公告
+  entry_urls:
+    - https://gggs.guizhou.zcygov.cn/announcement/lobby/queryPage
+
+  schedule:
+    enabled: true
+    interval_seconds: 3600
+
+  limits:
+    max_concurrency: 3
+    request_interval_seconds: 0.5
+
+  request:
+    method: POST
+    headers:
+      Content-Type: application/json;charset=UTF-8
+      Accept: application/json, text/plain, */*
+      X-Requested-With: XMLHttpRequest
+      Referer: https://gggs.guizhou.zcygov.cn/luban/announcement/list
+    params: {}
+    timeout_seconds: 40
+    retries: 2
+    retry_backoff_seconds: 0.8
+    verify_ssl: false
+
+  pagination:
+    mode: json_template
+    start_page: 1
+    end_page: 3
+    json_template: '{"pageSize":15,"pageNo":{page},"announcementTypes":[8022],"district":"","extendThird":{"blackList":[],"whiteList":["GSWSCS","GZXYGH","GZZXXJ","GZDDCG","GZQCG","GZFXJJ"]}}'
+
+  cookie:
+    enabled: false
+
+  dedup:
+    redis_hash_key: zhaobiao:domian:linkqc
+    ttl_days: 30
+    prune_probability: 0.01
+
+  list_extraction:
+    response_html_selectors: []
+    item_selectors:
+      - kind: jsonpath
+        expr: $.result.data[*]
+    link_selectors:
+      - kind: jsonpath
+        expr: $.id
+    title_selectors:
+      - kind: jsonpath
+        expr: $.title
+    date_selectors: []
+    area_selectors:
+      - kind: jsonpath
+        expr: $.districtName
+    detail_url_template: "https://gggs.guizhou.zcygov.cn/luban/announcement/detail?encryptId={encryptId}"
+    min_title_length: 5
+    fallback_auto: false
+
+  detail_request:
+    method: POST
+    url: https://gggs.guizhou.zcygov.cn/announcement/lobby/queryPage
+    body_template: '{"announcementIds":["{link}"],"pageSize":1,"pageNo":1,"district":"","extendThird":{"blackList":[],"whiteList":["GSWSCS","GZXYGH","GZZXXJ","GZDDCG","GZQCG","GZFXJJ"]}}'
+
+  detail_extraction:
+    response_html_selectors:
+      - kind: jsonpath
+        expr: $.result.data[0].content
+    content_selectors:
+      - kind: xpath
+        expr: //body
+    title_selectors:
+      - kind: jsonpath
+        expr: $.result.data[0].title
+    date_selectors:
+      - kind: regex
+        expr: '(\d{4}年\d{1,2}月\d{1,2}日)'
+      - kind: regex
+        expr: '(\d{4}-\d{1,2}-\d{1,2})'
+    fallback_auto: true
+    fallback_readability: true
+    min_content_length: 30
+
+  attachments:
+    enabled: true
+    selectors:
+      - kind: xpath
+        expr: //a/@href
+    filename_selectors:
+      - kind: xpath
+        expr: //a//text()
+    allowed_extensions: [".pdf", ".doc", ".docx", ".xls", ".xlsx", ".zip", ".rar", ".txt"]
+    max_bytes: 52428800
+
+  classification:
+    default_type: zhongbiao
+    zhongbiao_keywords: []
+
+  area_extraction:
+    enabled: true
+    use_title_first: true
+
+  output:
+    enabled: true
+    queue_zhaobiao: zhaobiao:result:zhaobiao
+    queue_zhongbiao: zhaobiao:result:zhongbiao
+    attachment_dir_zhaobiao: /root/pachong/zhaobiao/data/附件
+    attachment_dir_zhongbiao: /root/pachong/zhaobiao/data_zb/附件

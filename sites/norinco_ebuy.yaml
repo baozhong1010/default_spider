@@ -1,0 +1,715 @@
+# 中国兵器工业集团电子采购平台（Norinco eBuy）- 阳光七采·兵纷招采电子招标投标交易平台
+# 站点性质：公告公开可读；投标/报价/下载招标文件需登录，本配置只抓公开公告。
+#
+# 【网络特性】www.norincogroup-ebuy.com:443 / bid.norincogroup-ebuy.com:443 只走 HTTPS：
+#   该站 80 端口不响应，且对高频/非浏览器指纹请求会「TCP 可连 + TLS 握手成功 + 直接 close_notify 空响应」
+#   （curl/Node/Chrome 均如此，代理出口同样被拒），因此 limits 里做了限速 + request.retries 重试。
+#
+# 【列表数据源】服务端渲染 HTML（非 SPA）：
+#   https://bid.norincogroup-ebuy.com/retrieve.do?typflag=<N>&es=1&page=<P>
+#   page=1 起、每页 10 条；typflag 即栏目：1 招标公告 / 2 预审公告 / 3 变更公告 /
+#   4 终止公告 / 5 中标候选人公示 / 6 中标结果公告。条目结构：
+#   div.item > .hd > em.blue|em.gold（公告类型） + a.tit（招标方） + p.sldivTitlep > a.sldivTitle
+#   （@href 详情、@title 完整标题）+ .xmtime > span.date（发布日期+地区）；.bd > ul.list 内有招标编号/开标时间等。
+#
+# 【详情数据源】公告原件是 PDF，但站点用 JS 查看器包了一层，不能直接当正文：
+#   详情页 <iframe id="pdfIframe" src="/pages/cfcaPdf/TrustSignPDF.js/web/ggviewer.jsp?file=<bidfile 直链 pdf>">
+#   diag：框架 PdfBodyDetector 会把 ggviewer.jsp?file=xxx.pdf 整体当成 pdf_url（URL 以 .pdf 结尾，
+#   _detect_pdfjs_viewer_url 只认 pdfjs/web/viewer.html|viewer.html?file=，认不出 ggviewer.jsp），
+#   于是框架下载到的是 viewer 的 HTML，pdfminer 报 "No /Root object! - Is this really a PDF?"，
+#   整条记录会以「PDF 正文解析失败」丢弃。→ 因此本配置不依赖框架 PDF 转正文：
+#   · 正文 content_selectors 抓 //div[contains(@class,"zbztb_container")]（公告标题/货物分类/
+#     招标方/官方认证/发布时间+浏览次数/公告时间轴，约 300~500 字，稳定 > min_content_length）；
+#   · 公告原件 PDF 由 attachments 落盘（xpath 抓同一 iframe src，命中 viewer URL）；
+#   · 原文链接仍为官方详情页，附件里可下载 PDF 原件。
+#   备注：PDF 直链本身（bidfile.norincogroup-ebuy.com/bdfileservice/.../*.pdf，Content-Type: application/pdf）
+#   用 pdfminer 可正常提取正文（实测 6 类公告 280~3200 字、无 cid 乱码）；若日后框架支持从 viewer 的
+#   ?file= 参数二次解析，可改回「PDF 转正文」以获得完整公告全文。
+
+- id: norinco_ebuy_zbgg
+  enabled: true
+  name: 兵器工业集团电子采购平台-招标公告
+  entry_urls:
+    - https://bid.norincogroup-ebuy.com
+
+  schedule:
+    enabled: true
+    interval_seconds: 3600
+
+  limits:
+    max_concurrency: 1
+    request_interval_seconds: 2.0
+
+  request:
+    method: GET
+    headers:
+      Referer: https://bid.norincogroup-ebuy.com/retrieve.do?typflag=1&es=1
+      Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8
+      Accept-Language: zh-CN,zh;q=0.9
+    params: {}
+    timeout_seconds: 45
+    retries: 5
+    retry_backoff_seconds: 3.0
+    verify_ssl: false
+
+  pagination:
+    mode: url_template
+    start_page: 1
+    end_page: 1
+    url_template: "{base_url}/retrieve.do?typflag=1&es=1&page={page}"
+
+  cookie:
+    enabled: false
+
+  dedup:
+    redis_hash_key: zhaobiao:domian:linkqc
+    ttl_days: 30
+    prune_probability: 0.01
+
+  list_extraction:
+    response_html_selectors: []
+    item_selectors:
+      - kind: xpath
+        expr: //div[contains(@class, "zbztbn_searchlist")]//div[@class="item"]
+    link_selectors:
+      - kind: xpath
+        expr: .//a[contains(@class, "sldivTitle")]/@href
+    title_selectors:
+      - kind: xpath
+        expr: .//a[contains(@class, "sldivTitle")]/@title
+    date_selectors:
+      - kind: xpath
+        expr: .//span[@class="date"]/text()
+      - kind: regex
+        expr: '发布日期[:：]\s*(\d{4}-\d{2}-\d{2})'
+    # 地区：span.date 内 iconfont 之后的地区文本（如「北京市」），交给 detect_area 归并到省级
+    area_selectors:
+      - kind: regex
+        expr: '<i class="iconfont">&#xe61e;</i>([^<]{2,10})<'
+      - kind: xpath
+        expr: .//span[@class="date"]
+    min_title_length: 6
+    fallback_auto: false
+
+  detail_extraction:
+    response_html_selectors: []
+    # 公告 PDF 是「正文」，但站点用 ggviewer.jsp?file=xxx.pdf 包了一层 JS 查看器：
+    # 框架 PdfBodyDetector 会把该 viewer URL 当成 pdf_url 去下载（拿到的是 HTML），pdfminer 必然失败，
+    # 故不能依赖框架的 PDF 转正文分支。这里改为抓详情页 HTML 元信息作为正文（约 300~500 字），
+    # 公告原件 PDF 由 attachments 落盘，原文链接仍指向官方详情页。
+    content_selectors:
+      - kind: xpath
+        expr: //div[contains(@class, "zbztb_container")]
+      - kind: xpath
+        expr: //div[contains(@class, "zbztb_filetit")]
+    # 只取 h3 直属文本，避免把「关注此项目」等 span 说明文字带进标题
+    title_selectors:
+      - kind: xpath
+        expr: //div[contains(@class, "zbztb_filetit")]//h3/text()
+    date_selectors:
+      - kind: regex
+        expr: '发布时间[:：]\s*(\d{4}-\d{2}-\d{2})'
+    fallback_auto: true
+    fallback_readability: true
+    min_content_length: 180
+
+  attachments:
+    enabled: true
+    selectors:
+      # iframe 的 src 形如 /pages/cfcaPdf/TrustSignPDF.js/web/ggviewer.jsp?file=https://bidfile.../*.pdf
+      # 说明：框架 url_template 不支持「取 ?file= 之后的子串」，因此只能下载 viewer 地址本身
+      #（服务端返回的是 HTML 查看器页，不是 PDF 字节）；文件名由 filename_selectors 修正为真实 PDF 名。
+      - kind: xpath
+        expr: //iframe[contains(@id, "pdfIframe")]/@src
+    # 附件名取 viewer 里 file= 的 PDF basename（否则落盘名会是 ggviewer.jsp）
+    filename_selectors:
+      - kind: regex
+        expr: 'pdfIframe[^>]*?src="[^"]*?/([^/"]+\.pdf)"'
+    url_template: "https://bid.norincogroup-ebuy.com{value}"
+    allowed_extensions: [".pdf", ".doc", ".docx", ".xls", ".xlsx", ".zip", ".rar"]
+    max_bytes: 52428800
+
+  classification:
+    default_type: zhaobiao
+    zhongbiao_keywords: []
+
+  area_extraction:
+    enabled: true
+    # 列表页 span.date 已给出地区（item_area 优先）；标题次之，最后才看正文，
+    # 避免详情页公告时间轴里「招标方地址（如陕西省）」把地区带偏
+    use_title_first: true
+
+  output:
+    enabled: true
+    queue_zhaobiao: zhaobiao:result:zhaobiao
+    queue_zhongbiao: zhaobiao:result:zhongbiao
+    attachment_dir_zhaobiao: /root/pachong/zhaobiao/data/附件
+    attachment_dir_zhongbiao: /root/pachong/zhaobiao/data_zb/附件
+
+- id: norinco_ebuy_ysgg
+  enabled: true
+  name: 兵器工业集团电子采购平台-资格预审公告
+  entry_urls:
+    - https://bid.norincogroup-ebuy.com
+
+  schedule:
+    enabled: true
+    interval_seconds: 3600
+
+  limits:
+    max_concurrency: 1
+    request_interval_seconds: 2.0
+
+  request:
+    method: GET
+    headers:
+      Referer: https://bid.norincogroup-ebuy.com/retrieve.do?typflag=2&es=1
+      Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8
+      Accept-Language: zh-CN,zh;q=0.9
+    params: {}
+    timeout_seconds: 45
+    retries: 5
+    retry_backoff_seconds: 3.0
+    verify_ssl: false
+
+  pagination:
+    mode: url_template
+    start_page: 1
+    end_page: 1
+    url_template: "{base_url}/retrieve.do?typflag=2&es=1&page={page}"
+
+  cookie:
+    enabled: false
+
+  dedup:
+    redis_hash_key: zhaobiao:domian:linkqc
+    ttl_days: 30
+    prune_probability: 0.01
+
+  list_extraction:
+    response_html_selectors: []
+    item_selectors:
+      - kind: xpath
+        expr: //div[contains(@class, "zbztbn_searchlist")]//div[@class="item"]
+    link_selectors:
+      - kind: xpath
+        expr: .//a[contains(@class, "sldivTitle")]/@href
+    title_selectors:
+      - kind: xpath
+        expr: .//a[contains(@class, "sldivTitle")]/@title
+    date_selectors:
+      - kind: xpath
+        expr: .//span[@class="date"]/text()
+      - kind: regex
+        expr: '发布日期[:：]\s*(\d{4}-\d{2}-\d{2})'
+    # 地区：span.date 内 iconfont 之后的地区文本（如「北京市」），交给 detect_area 归并到省级
+    area_selectors:
+      - kind: regex
+        expr: '<i class="iconfont">&#xe61e;</i>([^<]{2,10})<'
+      - kind: xpath
+        expr: .//span[@class="date"]
+    min_title_length: 6
+    fallback_auto: false
+
+  detail_extraction:
+    response_html_selectors: []
+    content_selectors:
+      - kind: xpath
+        expr: //div[contains(@class, "zbztb_container")]
+      - kind: xpath
+        expr: //div[contains(@class, "zbztb_filetit")]
+    # 只取 h3 直属文本，避免把「关注此项目」等 span 说明文字带进标题
+    title_selectors:
+      - kind: xpath
+        expr: //div[contains(@class, "zbztb_filetit")]//h3/text()
+    date_selectors:
+      - kind: regex
+        expr: '发布时间[:：]\s*(\d{4}-\d{2}-\d{2})'
+    fallback_auto: true
+    fallback_readability: true
+    min_content_length: 180
+
+  attachments:
+    enabled: true
+    selectors:
+      - kind: xpath
+        expr: //iframe[contains(@id, "pdfIframe")]/@src
+    # 附件名取 viewer 里 file= 的 PDF basename（否则落盘名会是 ggviewer.jsp）
+    filename_selectors:
+      - kind: regex
+        expr: 'pdfIframe[^>]*?src="[^"]*?/([^/"]+\.pdf)"'
+    url_template: "https://bid.norincogroup-ebuy.com{value}"
+    allowed_extensions: [".pdf", ".doc", ".docx", ".xls", ".xlsx", ".zip", ".rar"]
+    max_bytes: 52428800
+
+  classification:
+    default_type: zhaobiao
+    zhongbiao_keywords: []
+
+  area_extraction:
+    enabled: true
+    # 列表页 span.date 已给出地区（item_area 优先）；标题次之，最后才看正文，
+    # 避免详情页公告时间轴里「招标方地址（如陕西省）」把地区带偏
+    use_title_first: true
+
+  output:
+    enabled: true
+    queue_zhaobiao: zhaobiao:result:zhaobiao
+    queue_zhongbiao: zhaobiao:result:zhongbiao
+    attachment_dir_zhaobiao: /root/pachong/zhaobiao/data/附件
+    attachment_dir_zhongbiao: /root/pachong/zhaobiao/data_zb/附件
+
+- id: norinco_ebuy_bggg
+  enabled: true
+  name: 兵器工业集团电子采购平台-变更公告
+  entry_urls:
+    - https://bid.norincogroup-ebuy.com
+
+  schedule:
+    enabled: true
+    interval_seconds: 3600
+
+  limits:
+    max_concurrency: 1
+    request_interval_seconds: 2.0
+
+  request:
+    method: GET
+    headers:
+      Referer: https://bid.norincogroup-ebuy.com/retrieve.do?typflag=3&es=1
+      Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8
+      Accept-Language: zh-CN,zh;q=0.9
+    params: {}
+    timeout_seconds: 45
+    retries: 5
+    retry_backoff_seconds: 3.0
+    verify_ssl: false
+
+  pagination:
+    mode: url_template
+    start_page: 1
+    end_page: 1
+    url_template: "{base_url}/retrieve.do?typflag=3&es=1&page={page}"
+
+  cookie:
+    enabled: false
+
+  dedup:
+    redis_hash_key: zhaobiao:domian:linkqc
+    ttl_days: 30
+    prune_probability: 0.01
+
+  list_extraction:
+    response_html_selectors: []
+    item_selectors:
+      - kind: xpath
+        expr: //div[contains(@class, "zbztbn_searchlist")]//div[@class="item"]
+    link_selectors:
+      - kind: xpath
+        expr: .//a[contains(@class, "sldivTitle")]/@href
+    title_selectors:
+      - kind: xpath
+        expr: .//a[contains(@class, "sldivTitle")]/@title
+    date_selectors:
+      - kind: xpath
+        expr: .//span[@class="date"]/text()
+      - kind: regex
+        expr: '发布日期[:：]\s*(\d{4}-\d{2}-\d{2})'
+    # 地区：span.date 内 iconfont 之后的地区文本（如「北京市」），交给 detect_area 归并到省级
+    area_selectors:
+      - kind: regex
+        expr: '<i class="iconfont">&#xe61e;</i>([^<]{2,10})<'
+      - kind: xpath
+        expr: .//span[@class="date"]
+    min_title_length: 6
+    fallback_auto: false
+
+  detail_extraction:
+    response_html_selectors: []
+    content_selectors:
+      - kind: xpath
+        expr: //div[contains(@class, "zbztb_container")]
+      - kind: xpath
+        expr: //div[contains(@class, "zbztb_filetit")]
+    # 只取 h3 直属文本，避免把「关注此项目」等 span 说明文字带进标题
+    title_selectors:
+      - kind: xpath
+        expr: //div[contains(@class, "zbztb_filetit")]//h3/text()
+    date_selectors:
+      - kind: regex
+        expr: '发布时间[:：]\s*(\d{4}-\d{2}-\d{2})'
+    fallback_auto: true
+    fallback_readability: true
+    min_content_length: 180
+
+  attachments:
+    enabled: true
+    selectors:
+      - kind: xpath
+        expr: //iframe[contains(@id, "pdfIframe")]/@src
+    # 附件名取 viewer 里 file= 的 PDF basename（否则落盘名会是 ggviewer.jsp）
+    filename_selectors:
+      - kind: regex
+        expr: 'pdfIframe[^>]*?src="[^"]*?/([^/"]+\.pdf)"'
+    url_template: "https://bid.norincogroup-ebuy.com{value}"
+    allowed_extensions: [".pdf", ".doc", ".docx", ".xls", ".xlsx", ".zip", ".rar"]
+    max_bytes: 52428800
+
+  classification:
+    default_type: zhaobiao
+    zhongbiao_keywords: []
+
+  area_extraction:
+    enabled: true
+    # 列表页 span.date 已给出地区（item_area 优先）；标题次之，最后才看正文，
+    # 避免详情页公告时间轴里「招标方地址（如陕西省）」把地区带偏
+    use_title_first: true
+
+  output:
+    enabled: true
+    queue_zhaobiao: zhaobiao:result:zhaobiao
+    queue_zhongbiao: zhaobiao:result:zhongbiao
+    attachment_dir_zhaobiao: /root/pachong/zhaobiao/data/附件
+    attachment_dir_zhongbiao: /root/pachong/zhaobiao/data_zb/附件
+
+- id: norinco_ebuy_zzgg
+  enabled: true
+  name: 兵器工业集团电子采购平台-终止公告
+  entry_urls:
+    - https://bid.norincogroup-ebuy.com
+
+  schedule:
+    enabled: true
+    interval_seconds: 3600
+
+  limits:
+    max_concurrency: 1
+    request_interval_seconds: 2.0
+
+  request:
+    method: GET
+    headers:
+      Referer: https://bid.norincogroup-ebuy.com/retrieve.do?typflag=4&es=1
+      Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8
+      Accept-Language: zh-CN,zh;q=0.9
+    params: {}
+    timeout_seconds: 45
+    retries: 5
+    retry_backoff_seconds: 3.0
+    verify_ssl: false
+
+  pagination:
+    mode: url_template
+    start_page: 1
+    end_page: 1
+    url_template: "{base_url}/retrieve.do?typflag=4&es=1&page={page}"
+
+  cookie:
+    enabled: false
+
+  dedup:
+    redis_hash_key: zhaobiao:domian:linkqc
+    ttl_days: 30
+    prune_probability: 0.01
+
+  list_extraction:
+    response_html_selectors: []
+    item_selectors:
+      - kind: xpath
+        expr: //div[contains(@class, "zbztbn_searchlist")]//div[@class="item"]
+    link_selectors:
+      - kind: xpath
+        expr: .//a[contains(@class, "sldivTitle")]/@href
+    title_selectors:
+      - kind: xpath
+        expr: .//a[contains(@class, "sldivTitle")]/@title
+    date_selectors:
+      - kind: xpath
+        expr: .//span[@class="date"]/text()
+      - kind: regex
+        expr: '发布日期[:：]\s*(\d{4}-\d{2}-\d{2})'
+    # 地区：span.date 内 iconfont 之后的地区文本（如「北京市」），交给 detect_area 归并到省级
+    area_selectors:
+      - kind: regex
+        expr: '<i class="iconfont">&#xe61e;</i>([^<]{2,10})<'
+      - kind: xpath
+        expr: .//span[@class="date"]
+    min_title_length: 6
+    fallback_auto: false
+
+  detail_extraction:
+    response_html_selectors: []
+    content_selectors:
+      - kind: xpath
+        expr: //div[contains(@class, "zbztb_container")]
+      - kind: xpath
+        expr: //div[contains(@class, "zbztb_filetit")]
+    # 只取 h3 直属文本，避免把「关注此项目」等 span 说明文字带进标题
+    title_selectors:
+      - kind: xpath
+        expr: //div[contains(@class, "zbztb_filetit")]//h3/text()
+    date_selectors:
+      - kind: regex
+        expr: '发布时间[:：]\s*(\d{4}-\d{2}-\d{2})'
+    fallback_auto: true
+    fallback_readability: true
+    min_content_length: 180
+
+  attachments:
+    enabled: true
+    selectors:
+      - kind: xpath
+        expr: //iframe[contains(@id, "pdfIframe")]/@src
+    # 附件名取 viewer 里 file= 的 PDF basename（否则落盘名会是 ggviewer.jsp）
+    filename_selectors:
+      - kind: regex
+        expr: 'pdfIframe[^>]*?src="[^"]*?/([^/"]+\.pdf)"'
+    url_template: "https://bid.norincogroup-ebuy.com{value}"
+    allowed_extensions: [".pdf", ".doc", ".docx", ".xls", ".xlsx", ".zip", ".rar"]
+    max_bytes: 52428800
+
+  # 终止公告属于招标/采购流程类公告（对应 typflag=4），归 zhaobiao
+  classification:
+    default_type: zhaobiao
+    zhongbiao_keywords: []
+
+  area_extraction:
+    enabled: true
+    # 列表页 span.date 已给出地区（item_area 优先）；标题次之，最后才看正文，
+    # 避免详情页公告时间轴里「招标方地址（如陕西省）」把地区带偏
+    use_title_first: true
+
+  output:
+    enabled: true
+    queue_zhaobiao: zhaobiao:result:zhaobiao
+    queue_zhongbiao: zhaobiao:result:zhongbiao
+    attachment_dir_zhaobiao: /root/pachong/zhaobiao/data/附件
+    attachment_dir_zhongbiao: /root/pachong/zhaobiao/data_zb/附件
+
+- id: norinco_ebuy_hxrgs
+  enabled: true
+  name: 兵器工业集团电子采购平台-中标候选人公示
+  entry_urls:
+    - https://bid.norincogroup-ebuy.com
+
+  schedule:
+    enabled: true
+    interval_seconds: 3600
+
+  limits:
+    max_concurrency: 1
+    request_interval_seconds: 2.0
+
+  request:
+    method: GET
+    headers:
+      Referer: https://bid.norincogroup-ebuy.com/retrieve.do?typflag=5&es=1
+      Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8
+      Accept-Language: zh-CN,zh;q=0.9
+    params: {}
+    timeout_seconds: 45
+    retries: 5
+    retry_backoff_seconds: 3.0
+    verify_ssl: false
+
+  pagination:
+    mode: url_template
+    start_page: 1
+    end_page: 1
+    url_template: "{base_url}/retrieve.do?typflag=5&es=1&page={page}"
+
+  cookie:
+    enabled: false
+
+  dedup:
+    redis_hash_key: zhaobiao:domian:linkqc
+    ttl_days: 30
+    prune_probability: 0.01
+
+  list_extraction:
+    response_html_selectors: []
+    item_selectors:
+      - kind: xpath
+        expr: //div[contains(@class, "zbztbn_searchlist")]//div[@class="item"]
+    link_selectors:
+      - kind: xpath
+        expr: .//a[contains(@class, "sldivTitle")]/@href
+    title_selectors:
+      - kind: xpath
+        expr: .//a[contains(@class, "sldivTitle")]/@title
+    date_selectors:
+      - kind: xpath
+        expr: .//span[@class="date"]/text()
+      - kind: regex
+        expr: '发布日期[:：]\s*(\d{4}-\d{2}-\d{2})'
+    # 地区：span.date 内 iconfont 之后的地区文本（如「北京市」），交给 detect_area 归并到省级
+    area_selectors:
+      - kind: regex
+        expr: '<i class="iconfont">&#xe61e;</i>([^<]{2,10})<'
+      - kind: xpath
+        expr: .//span[@class="date"]
+    min_title_length: 6
+    fallback_auto: false
+
+  detail_extraction:
+    response_html_selectors: []
+    content_selectors:
+      - kind: xpath
+        expr: //div[contains(@class, "zbztb_container")]
+      - kind: xpath
+        expr: //div[contains(@class, "zbztb_filetit")]
+    # 只取 h3 直属文本，避免把「关注此项目」等 span 说明文字带进标题
+    title_selectors:
+      - kind: xpath
+        expr: //div[contains(@class, "zbztb_filetit")]//h3/text()
+    date_selectors:
+      - kind: regex
+        expr: '发布时间[:：]\s*(\d{4}-\d{2}-\d{2})'
+    fallback_auto: true
+    fallback_readability: true
+    min_content_length: 180
+
+  attachments:
+    enabled: true
+    selectors:
+      - kind: xpath
+        expr: //iframe[contains(@id, "pdfIframe")]/@src
+    # 附件名取 viewer 里 file= 的 PDF basename（否则落盘名会是 ggviewer.jsp）
+    filename_selectors:
+      - kind: regex
+        expr: 'pdfIframe[^>]*?src="[^"]*?/([^/"]+\.pdf)"'
+    url_template: "https://bid.norincogroup-ebuy.com{value}"
+    allowed_extensions: [".pdf", ".doc", ".docx", ".xls", ".xlsx", ".zip", ".rar"]
+    max_bytes: 52428800
+
+  # 栏目固定为「中标候选人公示」，全部归 zhongbiao
+  classification:
+    default_type: zhongbiao
+    zhongbiao_keywords: []
+
+  area_extraction:
+    enabled: true
+    # 列表页 span.date 已给出地区（item_area 优先）；标题次之，最后才看正文，
+    # 避免详情页公告时间轴里「招标方地址（如陕西省）」把地区带偏
+    use_title_first: true
+
+  output:
+    enabled: true
+    queue_zhaobiao: zhaobiao:result:zhaobiao
+    queue_zhongbiao: zhaobiao:result:zhongbiao
+    attachment_dir_zhaobiao: /root/pachong/zhaobiao/data/附件
+    attachment_dir_zhongbiao: /root/pachong/zhaobiao/data_zb/附件
+
+- id: norinco_ebuy_jggg
+  enabled: true
+  name: 兵器工业集团电子采购平台-中标结果公告
+  entry_urls:
+    - https://bid.norincogroup-ebuy.com
+
+  schedule:
+    enabled: true
+    interval_seconds: 3600
+
+  limits:
+    max_concurrency: 1
+    request_interval_seconds: 2.0
+
+  request:
+    method: GET
+    headers:
+      Referer: https://bid.norincogroup-ebuy.com/retrieve.do?typflag=6&es=1
+      Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8
+      Accept-Language: zh-CN,zh;q=0.9
+    params: {}
+    timeout_seconds: 45
+    retries: 5
+    retry_backoff_seconds: 3.0
+    verify_ssl: false
+
+  pagination:
+    mode: url_template
+    start_page: 1
+    end_page: 1
+    url_template: "{base_url}/retrieve.do?typflag=6&es=1&page={page}"
+
+  cookie:
+    enabled: false
+
+  dedup:
+    redis_hash_key: zhaobiao:domian:linkqc
+    ttl_days: 30
+    prune_probability: 0.01
+
+  list_extraction:
+    response_html_selectors: []
+    item_selectors:
+      - kind: xpath
+        expr: //div[contains(@class, "zbztbn_searchlist")]//div[@class="item"]
+    link_selectors:
+      - kind: xpath
+        expr: .//a[contains(@class, "sldivTitle")]/@href
+    title_selectors:
+      - kind: xpath
+        expr: .//a[contains(@class, "sldivTitle")]/@title
+    date_selectors:
+      - kind: xpath
+        expr: .//span[@class="date"]/text()
+      - kind: regex
+        expr: '发布日期[:：]\s*(\d{4}-\d{2}-\d{2})'
+    # 地区：span.date 内 iconfont 之后的地区文本（如「北京市」），交给 detect_area 归并到省级
+    area_selectors:
+      - kind: regex
+        expr: '<i class="iconfont">&#xe61e;</i>([^<]{2,10})<'
+      - kind: xpath
+        expr: .//span[@class="date"]
+    min_title_length: 6
+    fallback_auto: false
+
+  detail_extraction:
+    response_html_selectors: []
+    content_selectors:
+      - kind: xpath
+        expr: //div[contains(@class, "zbztb_container")]
+      - kind: xpath
+        expr: //div[contains(@class, "zbztb_filetit")]
+    # 只取 h3 直属文本，避免把「关注此项目」等 span 说明文字带进标题
+    title_selectors:
+      - kind: xpath
+        expr: //div[contains(@class, "zbztb_filetit")]//h3/text()
+    date_selectors:
+      - kind: regex
+        expr: '发布时间[:：]\s*(\d{4}-\d{2}-\d{2})'
+    fallback_auto: true
+    fallback_readability: true
+    min_content_length: 180
+
+  attachments:
+    enabled: true
+    selectors:
+      - kind: xpath
+        expr: //iframe[contains(@id, "pdfIframe")]/@src
+    # 附件名取 viewer 里 file= 的 PDF basename（否则落盘名会是 ggviewer.jsp）
+    filename_selectors:
+      - kind: regex
+        expr: 'pdfIframe[^>]*?src="[^"]*?/([^/"]+\.pdf)"'
+    url_template: "https://bid.norincogroup-ebuy.com{value}"
+    allowed_extensions: [".pdf", ".doc", ".docx", ".xls", ".xlsx", ".zip", ".rar"]
+    max_bytes: 52428800
+
+  # 栏目固定为「中标结果公告」，全部归 zhongbiao
+  classification:
+    default_type: zhongbiao
+    zhongbiao_keywords: []
+
+  area_extraction:
+    enabled: true
+    # 列表页 span.date 已给出地区（item_area 优先）；标题次之，最后才看正文，
+    # 避免详情页公告时间轴里「招标方地址（如陕西省）」把地区带偏
+    use_title_first: true
+
+  output:
+    enabled: true
+    queue_zhaobiao: zhaobiao:result:zhaobiao
+    queue_zhongbiao: zhaobiao:result:zhongbiao
+    attachment_dir_zhaobiao: /root/pachong/zhaobiao/data/附件
+    attachment_dir_zhongbiao: /root/pachong/zhaobiao/data_zb/附件

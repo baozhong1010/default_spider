@@ -1,0 +1,418 @@
+# 国家开发银行采购网（cg.cdb.com.cn）—— 国家开发银行官方采购/招标信息发布平台
+#
+# 站点性质：服务端渲染的静态 CMS（URL 形如 /cms{caigou|jieguo|qita|tongzhi}/index.html），
+#   列表与详情全部为纯 HTML，无 AJAX、无 JS 渲染、无需登录、无 CA 要求。
+#   直连与系统代理 127.0.0.1:7890 均可访问（HTTP 200），响应编码 UTF-8（Content-Type 带 charset）。
+#
+# 栏目（导航「信息公告」下 3 个子栏目 + 顶部「通知公告」）：
+#   /cmscaigou/index.html  采购公告   共 677 条 / 68 页   → zhaobiao
+#   /cmsjieguo/index.html  结果公告   共 1518 条 / 152 页 → zhongbiao
+#   /cmsqita/index.html    其他公告   共 1273 条 / 128 页 → 按标题关键词分流（变更/延期/澄清 → zhaobiao；
+#                                                          废标/流标/失败/成交结果变更 → zhongbiao）
+#   /cmstongzhi/index.html 通知公告   仅 1 条（政策/通知，非招标类）→ 不配置
+#
+# 分页：第 1 页 = index.html，第 N 页 = index_{N}.html（注意 index_1.html 等同于第 1 页，
+#   真正的第 2 页是 index_2.html；已实测 index_2.html / index_3.html 均为 200）。
+#   框架 url_template 的 {page} 从 1 起，无法表达「第 1 页无后缀」，故用 mode: none +
+#   entry_urls 显式列出前 3 页（同 sites/jscdc.yaml 的做法）。
+#
+# 列表行结构（ul.list1 > li）：
+#   li > a[href="/cmscaigou/<32位hex>.html"]
+#        > div.tit > span[title]（完整标题；注意**约一半条目没有 title 属性，
+#                                此时 div.tit 文本被截断成「...」，由详情页 h1 回填完整标题）
+#        > div.date（2026/09/11 11:58:16 格式）
+#   故 title_selectors 用 `.//div[@class="tit"]//span/@title` 优先、`.//div[@class="tit"]//text()` 兜底。
+#
+# 详情页结构（静态 HTML）：
+#   h1.TxtCenter           完整标题（用于回填列表截断标题）
+#   div.Gray.TxtCenter     发布时间：2026/09/11 11:58:16 作者：本站编辑（用 regex 抽取后一段日期）
+#   div.Content            正文容器（内部是 Word 另存的 <html><body><p>…，含行内样式）
+#
+# 附件：部分公告正文里带真实附件，形如
+#   /cms/app/file/download/<32位fileid>?trt=<Base64(JSON)>
+#   （如「国家开发银行云南省分行机房不间断电源（UPS）电池采购项目招标公告」带 2 个 .doc，
+#     「…IBM软件原厂维保服务项目竞争性谈判公告」带 1 个 .docx；实测可匿名下载成功）。
+#   附件 URL 无文件后缀，故 allowed_extensions 必须留空（否则会被后缀过滤全部丢弃）；
+#   但同时正文里还有大量无关外链（www.e-bidding.org、user.gxzb.com.cn 注册页、mailto:、
+#   信用中国首页），用 allowed_extensions 过滤不掉，改用
+#   response_html_selectors: regex 只从原始 HTML 中抽取 /cms/app/file/download/… 链接，
+#   把这类纯外链噪音挡在下载流程之外。
+#   注意：真实文件名不在 URL 里，而来自下载响应的 Content-Disposition filename
+#   （无需 filename_selectors；实测落盘文件名为「GXCZ-C-26050036竞争性谈判公告9.4.docx」）。
+
+- id: cdb_caigou
+  enabled: true
+  name: 国家开发银行采购网-采购公告
+  entry_urls:
+    - https://cg.cdb.com.cn/cmscaigou/index.html
+    - https://cg.cdb.com.cn/cmscaigou/index_2.html
+    - https://cg.cdb.com.cn/cmscaigou/index_3.html
+
+  schedule:
+    enabled: true
+    interval_seconds: 3600
+
+  limits:
+    max_concurrency: 3
+    request_interval_seconds: 0.5
+
+  request:
+    method: GET
+    headers:
+      Referer: https://cg.cdb.com.cn/cmscaigou/index.html
+      Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8
+    params: {}
+    timeout_seconds: 40
+    retries: 2
+    retry_backoff_seconds: 0.8
+    verify_ssl: true
+
+  pagination:
+    # 第 1 页无后缀、第 N 页为 index_{N}.html，无法用 url_template 表达，故显式列出各页
+    mode: none
+    end_page: 1
+
+  crypto:
+    enabled: false
+
+  cookie:
+    enabled: false
+
+  dedup:
+    redis_hash_key: zhaobiao:domian:linkqc
+    ttl_days: 30
+    prune_probability: 0.01
+
+  list_extraction:
+    response_html_selectors: []
+    item_selectors:
+      - kind: xpath
+        expr: //ul[contains(@class, "list1")]/li
+    link_selectors:
+      - kind: xpath
+        expr: .//a/@href
+    title_selectors:
+      # 优先取 span 的 title 属性（完整标题）；无该属性时回退到 div.tit 文本（可能被截断，由详情 h1 回填）
+      - kind: xpath
+        expr: .//div[contains(@class, "tit")]//span/@title
+      - kind: xpath
+        expr: .//div[contains(@class, "tit")]//text()
+    date_selectors:
+      - kind: xpath
+        expr: .//div[contains(@class, "date")]//text()
+    min_title_length: 6
+    fallback_auto: false
+
+  detail_extraction:
+    response_html_selectors: []
+    content_selectors:
+      - kind: xpath
+        expr: //div[contains(@class, "Content")]
+    # 列表约半数条目标题被截断，用详情页 h1 回填完整标题
+    title_selectors:
+      - kind: xpath
+        expr: //h1//text()
+    # 「发布时间： 2026/09/11 11:58:16 作者：本站编辑」→ 取日期段
+    date_selectors:
+      - kind: regex
+        expr: "发布时间：\\s*(\\d{4}[/-]\\d{1,2}[/-]\\d{1,2}(?:\\s+\\d{1,2}:\\d{1,2}:\\d{1,2})?)"
+    fallback_auto: true
+    fallback_readability: true
+    min_content_length: 30
+
+  attachments:
+    enabled: true
+    # 只取站内附件下载接口（/cms/app/file/download/<fileid>?trt=…），避免把正文里无关外链
+    # （e-bidding.org、gxzb.com.cn 注册页、mailto:）误当附件下载；下载响应是文件流，故直接用 regex
+    selectors:
+      - kind: regex
+        expr: "(/cms/app/file/download/[0-9a-f]{32}\\?trt=[^\"'<> ]+)"
+    # 故意不配 filename_selectors：本框架的 filename_selectors 与 selectors 是
+    # 「按出现位置对齐」的（detail_extractor.py::_extract_attachments 用 names[i]），
+    # 而正文里除了附件链接还有 e-bidding.org / gxzb.com.cn / mailto 等无关 a 标签，
+    # 位置必然错位——实测三种写法都会把外链文本当成附件名：
+    #   //a//text()（文档级）→ 落盘名变成「使用帮助」，//div.Content//a//text() → 「http_ebid.gxzb.com.cn」。
+    # 因此这里留空，让框架回退到 URL basename（即那串 fileid），保证「URL 与文件名」永不错配。
+    # 真实文件名可从下载响应 Content-Disposition（如
+    # filename=%E6%8B%9B%E6%A0%87...%E9%A1%B9%E7%9B%AE.doc）还原。
+    allowed_extensions: []
+    max_bytes: 52428800
+
+  classification:
+    # 采购公告栏目只有招标/征集/谈判/询价类公告，固定 zhaobiao
+    default_type: zhaobiao
+    zhongbiao_keywords: []
+
+  area_extraction:
+    # 总行项目无地区限定，由标题中的分行名称（深圳市分行/四川省分行…）启发式提取
+    enabled: true
+    use_title_first: true
+
+  output:
+    enabled: true
+    queue_zhaobiao: zhaobiao:result:zhaobiao
+    queue_zhongbiao: zhaobiao:result:zhongbiao
+    attachment_dir_zhaobiao: /root/pachong/zhaobiao/data/附件
+    attachment_dir_zhongbiao: /root/pachong/zhaobiao/data_zb/附件
+
+- id: cdb_jieguo
+  enabled: true
+  name: 国家开发银行采购网-结果公告（中标/成交）
+  entry_urls:
+    - https://cg.cdb.com.cn/cmsjieguo/index.html
+    - https://cg.cdb.com.cn/cmsjieguo/index_2.html
+    - https://cg.cdb.com.cn/cmsjieguo/index_3.html
+
+  schedule:
+    enabled: true
+    interval_seconds: 3600
+
+  limits:
+    max_concurrency: 3
+    request_interval_seconds: 0.5
+
+  request:
+    method: GET
+    headers:
+      Referer: https://cg.cdb.com.cn/cmsjieguo/index.html
+      Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8
+    params: {}
+    timeout_seconds: 40
+    retries: 2
+    retry_backoff_seconds: 0.8
+    verify_ssl: true
+
+  pagination:
+    mode: none
+    end_page: 1
+
+  crypto:
+    enabled: false
+
+  cookie:
+    enabled: false
+
+  dedup:
+    redis_hash_key: zhaobiao:domian:linkqc
+    ttl_days: 30
+    prune_probability: 0.01
+
+  list_extraction:
+    response_html_selectors: []
+    item_selectors:
+      - kind: xpath
+        expr: //ul[contains(@class, "list1")]/li
+    link_selectors:
+      - kind: xpath
+        expr: .//a/@href
+    title_selectors:
+      - kind: xpath
+        expr: .//div[contains(@class, "tit")]//span/@title
+      - kind: xpath
+        expr: .//div[contains(@class, "tit")]//text()
+    date_selectors:
+      - kind: xpath
+        expr: .//div[contains(@class, "date")]//text()
+    min_title_length: 6
+    fallback_auto: false
+
+  detail_extraction:
+    response_html_selectors: []
+    content_selectors:
+      - kind: xpath
+        expr: //div[contains(@class, "Content")]
+    title_selectors:
+      - kind: xpath
+        expr: //h1//text()
+    date_selectors:
+      - kind: regex
+        expr: "发布时间：\\s*(\\d{4}[/-]\\d{1,2}[/-]\\d{1,2}(?:\\s+\\d{1,2}:\\d{1,2}:\\d{1,2})?)"
+    fallback_auto: true
+    fallback_readability: true
+    min_content_length: 30
+
+  attachments:
+    enabled: true
+    # 只取站内附件下载接口（/cms/app/file/download/<fileid>?trt=…），避免把正文里无关外链
+    # （e-bidding.org、gxzb.com.cn 注册页、mailto:）误当附件下载；下载响应是文件流，故直接用 regex
+    selectors:
+      - kind: regex
+        expr: "(/cms/app/file/download/[0-9a-f]{32}\\?trt=[^\"'<> ]+)"
+    # 故意不配 filename_selectors：本框架的 filename_selectors 与 selectors 是
+    # 「按出现位置对齐」的（detail_extractor.py::_extract_attachments 用 names[i]），
+    # 而正文里除了附件链接还有 e-bidding.org / gxzb.com.cn / mailto 等无关 a 标签，
+    # 位置必然错位——实测三种写法都会把外链文本当成附件名：
+    #   //a//text()（文档级）→ 落盘名变成「使用帮助」，//div.Content//a//text() → 「http_ebid.gxzb.com.cn」。
+    # 因此这里留空，让框架回退到 URL basename（即那串 fileid），保证「URL 与文件名」永不错配。
+    # 真实文件名可从下载响应 Content-Disposition（如
+    # filename=%E6%8B%9B%E6%A0%87...%E9%A1%B9%E7%9B%AE.doc）还原。
+    allowed_extensions: []
+    max_bytes: 52428800
+
+  classification:
+    # 结果公告栏目绝大多数是中标结果公示/成交结果公告，但站方会把
+    # 「二次招标公告 / 供应商征集公告」也归档到本栏目（实测抽样 30 条里有 9 条），
+    # 所以这里不能用 default_type=zhongbiao + zhongbiao_keywords: []，
+    # 否则这 9 条招标公告会被错误标成中标。
+    # 改为 default_type=zhaobiao + 「结果类专用短语」判定 zhongbiao。
+    #
+    # 关键词选取依据（对 3 个栏目共 90 条实测记录做误命中断言，见 search_website/cdb_notes.md）：
+    #   - 命中 0 误判：中标结果 / 结果公告 / 结果公示 / 废标 / 流标 / 采购失败
+    #   - 泛词「中标」在 11/90 条招标公告正文里出现（"中标人数量：1家"等）→ 禁用
+    #   - 「成交」误命中 2/90，「中选供应商」误命中 30/90（招标公告正文的资格条件里
+    #     普遍有"未被列入…中选供应商"表述）→ 禁用
+    #   - 「成交结果」唯一 1 条"误命中"实为「成交结果变更公告」，归 zhongbiao 合理 → 保留
+    default_type: zhaobiao
+    zhongbiao_keywords:
+      - 中标结果
+      - 中标公示
+      - 中标公告
+      - 成交结果
+      - 成交公示
+      - 成交公告
+      - 结果公告
+      - 结果公示
+      - 中选结果
+      - 中选公告
+      - 废标
+      - 流标
+      - 采购失败
+      - 终止公告
+
+  area_extraction:
+    enabled: true
+    use_title_first: true
+
+  output:
+    enabled: true
+    queue_zhaobiao: zhaobiao:result:zhaobiao
+    queue_zhongbiao: zhaobiao:result:zhongbiao
+    attachment_dir_zhaobiao: /root/pachong/zhaobiao/data/附件
+    attachment_dir_zhongbiao: /root/pachong/zhaobiao/data_zb/附件
+
+- id: cdb_qita
+  enabled: true
+  name: 国家开发银行采购网-其他公告（变更/延期/流标等杂项）
+  entry_urls:
+    - https://cg.cdb.com.cn/cmsqita/index.html
+    - https://cg.cdb.com.cn/cmsqita/index_2.html
+    - https://cg.cdb.com.cn/cmsqita/index_3.html
+
+  schedule:
+    enabled: true
+    interval_seconds: 3600
+
+  limits:
+    max_concurrency: 3
+    request_interval_seconds: 0.5
+
+  request:
+    method: GET
+    headers:
+      Referer: https://cg.cdb.com.cn/cmsqita/index.html
+      Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8
+    params: {}
+    timeout_seconds: 40
+    retries: 2
+    retry_backoff_seconds: 0.8
+    verify_ssl: true
+
+  pagination:
+    mode: none
+    end_page: 1
+
+  crypto:
+    enabled: false
+
+  cookie:
+    enabled: false
+
+  dedup:
+    redis_hash_key: zhaobiao:domian:linkqc
+    ttl_days: 30
+    prune_probability: 0.01
+
+  list_extraction:
+    response_html_selectors: []
+    item_selectors:
+      - kind: xpath
+        expr: //ul[contains(@class, "list1")]/li
+    link_selectors:
+      - kind: xpath
+        expr: .//a/@href
+    title_selectors:
+      - kind: xpath
+        expr: .//div[contains(@class, "tit")]//span/@title
+      - kind: xpath
+        expr: .//div[contains(@class, "tit")]//text()
+    date_selectors:
+      - kind: xpath
+        expr: .//div[contains(@class, "date")]//text()
+    min_title_length: 6
+    fallback_auto: false
+
+  detail_extraction:
+    response_html_selectors: []
+    content_selectors:
+      - kind: xpath
+        expr: //div[contains(@class, "Content")]
+    title_selectors:
+      - kind: xpath
+        expr: //h1//text()
+    date_selectors:
+      - kind: regex
+        expr: "发布时间：\\s*(\\d{4}[/-]\\d{1,2}[/-]\\d{1,2}(?:\\s+\\d{1,2}:\\d{1,2}:\\d{1,2})?)"
+    fallback_auto: true
+    fallback_readability: true
+    min_content_length: 30
+
+  attachments:
+    enabled: true
+    # 只取站内附件下载接口（/cms/app/file/download/<fileid>?trt=…），避免把正文里无关外链
+    # （e-bidding.org、gxzb.com.cn 注册页、mailto:）误当附件下载；下载响应是文件流，故直接用 regex
+    selectors:
+      - kind: regex
+        expr: "(/cms/app/file/download/[0-9a-f]{32}\\?trt=[^\"'<> ]+)"
+    # 故意不配 filename_selectors：本框架的 filename_selectors 与 selectors 是
+    # 「按出现位置对齐」的（detail_extractor.py::_extract_attachments 用 names[i]），
+    # 而正文里除了附件链接还有 e-bidding.org / gxzb.com.cn / mailto 等无关 a 标签，
+    # 位置必然错位——实测三种写法都会把外链文本当成附件名：
+    #   //a//text()（文档级）→ 落盘名变成「使用帮助」，//div.Content//a//text() → 「http_ebid.gxzb.com.cn」。
+    # 因此这里留空，让框架回退到 URL basename（即那串 fileid），保证「URL 与文件名」永不错配。
+    # 真实文件名可从下载响应 Content-Disposition（如
+    # filename=%E6%8B%9B%E6%A0%87...%E9%A1%B9%E7%9B%AE.doc）还原。
+    allowed_extensions: []
+    max_bytes: 52428800
+
+  classification:
+    # 该栏目为杂项：延期/变更/澄清/暂停/中止/二次征集 → 招标类；
+    # 废标/流标/采购失败/成交结果变更 → 结果类。
+    # 关键词同样只用结果类专用短语（理由见 cdb_jieguo 的注释：
+    # 泛词「中标/成交/结果」会被招标公告正文里的「中标人」等表述误命中）。
+    default_type: zhaobiao
+    zhongbiao_keywords:
+      - 中标结果
+      - 中标公示
+      - 中标公告
+      - 成交结果
+      - 成交公示
+      - 成交公告
+      - 结果公告
+      - 结果公示
+      - 中选结果
+      - 中选公告
+      - 废标
+      - 流标
+      - 采购失败
+      - 终止公告
+
+  area_extraction:
+    enabled: true
+    use_title_first: true
+
+  output:
+    enabled: true
+    queue_zhaobiao: zhaobiao:result:zhaobiao
+    queue_zhongbiao: zhaobiao:result:zhongbiao
+    attachment_dir_zhaobiao: /root/pachong/zhaobiao/data/附件
+    attachment_dir_zhongbiao: /root/pachong/zhaobiao/data_zb/附件

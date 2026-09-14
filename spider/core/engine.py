@@ -288,6 +288,15 @@ class SpiderEngine(object):
                 detail_data = {}
                 for k, v in parsed.items():
                     detail_data[k] = v[0] if v else ""
+            elif site.detail_request.url_template:
+                # 正文从接口取，item.url 仍保留人类可读页面（原文链接）
+                detail_url = (
+                    site.detail_request.url_template
+                    .replace("{value}", raw_link)
+                    .replace("{link}", raw_link)
+                    .replace("{title}", item.title)
+                )
+                detail_method = site.detail_request.method or "GET"
 
             req = FetchRequest(
                 url=detail_url,
@@ -674,7 +683,15 @@ class SpiderEngine(object):
             await detail_queue.put(None)
         await detail_queue.join()
         await asyncio.gather(*detail_workers)
-        success = metrics.published > 0 or (metrics.list_items > 0 and metrics.detail_requests > 0)
+        # 熔断判定：只有确实出错才算失败。
+        # 注意：本轮记录全部命中去重（detail_requests=0、published=0）是稳态下的正常结果，
+        # 若按失败计，会让「没有新公告」的站点被反复误熔断。
+        hard_failures = (
+            metrics.list_request_failed
+            + metrics.detail_request_failed
+            + metrics.extract_failed
+        )
+        success = metrics.published > 0 or (metrics.list_items > 0 and hard_failures == 0)
         self._update_circuit(site.id, success)
         self._log_metrics(metrics)
         return metrics

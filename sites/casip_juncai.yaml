@@ -1,0 +1,230 @@
+# 军队采购网（www.plap.mil.cn）
+#
+# 站点识别与可达性说明：
+#   任务给定的入口 http://211.166.247.119/cas/login 反查为 yc.plap.mil.cn
+#   （同 /24 网段 211.166.247.120 = 301hospital.mil.cn），即军队采购网的某个业务子系统 CAS 登录页。
+#   该主机从本机不可达：80 端口 TCP RST、443 端口静默丢包（详见 casip_notes.md），
+#   主站 www.plap.mil.cn（118.64.5.167）可正常访问且公告栏目完全公开，故按主站配置。
+#
+# 列表接口（首页 AJAX，freecms-glht 站点 siteId=404bb030-5be9-4070-85bd-c94b1473e8de）：
+#   GET https://www.plap.mil.cn/freecms-glht/rest/v1/notice/selectInfoMoreChannel.do
+#       ?&siteId=...&channel=<栏目GUID>&currPage=N&pageSize=20&noticeType=<类型码,逗号分隔>
+#       &regionCode=&cityOrArea=&punishType=
+#   返回 JSON：{msg, total, code, data:[{title, pageurl, noticeTime, noticeType,
+#               regionName, purchaseManner, purchaseNature, id, noticeId, content, ...}]}
+#   首页 JS 会给该接口加 RSA 签名头 nsssjss（encryptByRSA(url+'$$'+ts)），
+#   实测缺失该头同样返回 200 正常数据，故配置中不实现签名。
+#
+# 采购信息栏目（首页四组 tab，每组一个 channel GUID）：
+#   集中采购(电子采购)   a2399540-ac44-4c68-a612-9bdbdb3634e5
+#   集中采购(线下采购)   abbb350b-9b39-4a22-a4e3-94f54dffd929
+#   自行采购(自采平台)   a9d2cf13-a83a-402e-b432-b5aa1e904409  → 公开接口 total 恒为 0，未配置
+#   自行采购(线下采购)   e0172398-23dd-47be-a092-14c67a92bd4f
+#
+# noticeType 类型码（父子前缀匹配，首页“采购公告/采购结果公示”两个 tab 用的就是组合码）：
+#   采购公告：00101(采购公告) 001052(资格预审公告) 00105B(资格预审变更公告) 001031(变更公告)
+#   采购结果公示：00102(结果公示) 001060 00106B 001006(废标公告)
+#
+# 详情页：静态 HTML，正文在 div#noticeArea，标题 h1.info-title，发布时间 span#f_noticeTime。
+# 附件：正文里没有附件链接，附件走 /freecms/rest/v1/notice/selectNoticeDocInfo.do，
+#   其 fileUrl 下载需登录（返回 {"msg":"access_token不存在","code":"5562"}），故 attachments.enabled=false。
+
+- id: casip_juncai_cggg
+  enabled: true
+  name: 军队采购网-采购公告(招标)
+  entry_urls:
+    - "https://www.plap.mil.cn/freecms-glht/rest/v1/notice/selectInfoMoreChannel.do?&siteId=404bb030-5be9-4070-85bd-c94b1473e8de&channel=a2399540-ac44-4c68-a612-9bdbdb3634e5&pageSize=20&noticeType=00101,001052,00105B,001031&regionCode=&cityOrArea=&punishType="
+    - "https://www.plap.mil.cn/freecms-glht/rest/v1/notice/selectInfoMoreChannel.do?&siteId=404bb030-5be9-4070-85bd-c94b1473e8de&channel=abbb350b-9b39-4a22-a4e3-94f54dffd929&pageSize=20&noticeType=00101,001052,00105B,001031&regionCode=&cityOrArea=&punishType="
+    - "https://www.plap.mil.cn/freecms-glht/rest/v1/notice/selectInfoMoreChannel.do?&siteId=404bb030-5be9-4070-85bd-c94b1473e8de&channel=e0172398-23dd-47be-a092-14c67a92bd4f&pageSize=20&noticeType=00101,001052,00105B,001031&regionCode=&cityOrArea=&punishType="
+
+  schedule:
+    enabled: true
+    interval_seconds: 3600
+
+  limits:
+    max_concurrency: 3
+    request_interval_seconds: 0.3
+
+  request:
+    method: GET
+    headers:
+      Referer: https://www.plap.mil.cn/
+      Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8
+      Accept-Language: zh-CN,zh;q=0.9
+      X-Requested-With: XMLHttpRequest
+    params: {}
+    timeout_seconds: 40
+    retries: 2
+    retry_backoff_seconds: 0.8
+    verify_ssl: false
+
+  pagination:
+    mode: page_param
+    start_page: 1
+    end_page: 3
+    page_param: currPage
+
+  cookie:
+    enabled: false
+
+  dedup:
+    redis_hash_key: zhaobiao:domian:linkqc
+    ttl_days: 30
+    prune_probability: 0.01
+
+  list_extraction:
+    response_html_selectors: []
+    item_selectors:
+      - kind: jsonpath
+        expr: $.data[*]
+    link_selectors:
+      - kind: jsonpath
+        expr: $.pageurl
+    title_selectors:
+      - kind: jsonpath
+        expr: $.title
+    date_selectors:
+      - kind: jsonpath
+        expr: $.noticeTime
+    area_selectors:
+      - kind: jsonpath
+        expr: $.regionName
+    detail_url_template: "https://www.plap.mil.cn{pageurl}"
+    min_title_length: 8
+    fallback_auto: false
+
+  detail_extraction:
+    response_html_selectors: []
+    content_selectors:
+      - kind: xpath
+        expr: //div[@id="noticeArea"]
+    title_selectors:
+      - kind: xpath
+        expr: //h1[contains(@class, "info-title")]
+    date_selectors:
+      - kind: xpath
+        expr: //span[@id="f_noticeTime"]
+    fallback_auto: true
+    fallback_readability: true
+    min_content_length: 30
+
+  attachments:
+    enabled: false
+    selectors: []
+    allowed_extensions: []
+    max_bytes: 52428800
+
+  classification:
+    default_type: zhaobiao
+    zhongbiao_keywords: []
+
+  area_extraction:
+    enabled: true
+    use_title_first: true
+
+  output:
+    enabled: true
+    queue_zhaobiao: zhaobiao:result:zhaobiao
+    queue_zhongbiao: zhaobiao:result:zhongbiao
+    attachment_dir_zhaobiao: /root/pachong/zhaobiao/data/附件
+    attachment_dir_zhongbiao: /root/pachong/zhaobiao/data_zb/附件
+
+- id: casip_juncai_jggs
+  enabled: true
+  name: 军队采购网-采购结果公示(中标)
+  entry_urls:
+    - "https://www.plap.mil.cn/freecms-glht/rest/v1/notice/selectInfoMoreChannel.do?&siteId=404bb030-5be9-4070-85bd-c94b1473e8de&channel=a2399540-ac44-4c68-a612-9bdbdb3634e5&pageSize=20&noticeType=00102,001060,00106B,001006&regionCode=&cityOrArea=&punishType="
+    - "https://www.plap.mil.cn/freecms-glht/rest/v1/notice/selectInfoMoreChannel.do?&siteId=404bb030-5be9-4070-85bd-c94b1473e8de&channel=abbb350b-9b39-4a22-a4e3-94f54dffd929&pageSize=20&noticeType=00102,001060,00106B,001006&regionCode=&cityOrArea=&punishType="
+    - "https://www.plap.mil.cn/freecms-glht/rest/v1/notice/selectInfoMoreChannel.do?&siteId=404bb030-5be9-4070-85bd-c94b1473e8de&channel=e0172398-23dd-47be-a092-14c67a92bd4f&pageSize=20&noticeType=00102,001060,00106B,001006&regionCode=&cityOrArea=&punishType="
+
+  schedule:
+    enabled: true
+    interval_seconds: 3600
+
+  limits:
+    max_concurrency: 3
+    request_interval_seconds: 0.3
+
+  request:
+    method: GET
+    headers:
+      Referer: https://www.plap.mil.cn/
+      Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8
+      Accept-Language: zh-CN,zh;q=0.9
+      X-Requested-With: XMLHttpRequest
+    params: {}
+    timeout_seconds: 40
+    retries: 2
+    retry_backoff_seconds: 0.8
+    verify_ssl: false
+
+  pagination:
+    mode: page_param
+    start_page: 1
+    end_page: 3
+    page_param: currPage
+
+  cookie:
+    enabled: false
+
+  dedup:
+    redis_hash_key: zhaobiao:domian:linkqc
+    ttl_days: 30
+    prune_probability: 0.01
+
+  list_extraction:
+    response_html_selectors: []
+    item_selectors:
+      - kind: jsonpath
+        expr: $.data[*]
+    link_selectors:
+      - kind: jsonpath
+        expr: $.pageurl
+    title_selectors:
+      - kind: jsonpath
+        expr: $.title
+    date_selectors:
+      - kind: jsonpath
+        expr: $.noticeTime
+    area_selectors:
+      - kind: jsonpath
+        expr: $.regionName
+    detail_url_template: "https://www.plap.mil.cn{pageurl}"
+    min_title_length: 8
+    fallback_auto: false
+
+  detail_extraction:
+    response_html_selectors: []
+    content_selectors:
+      - kind: xpath
+        expr: //div[@id="noticeArea"]
+    title_selectors:
+      - kind: xpath
+        expr: //h1[contains(@class, "info-title")]
+    date_selectors:
+      - kind: xpath
+        expr: //span[@id="f_noticeTime"]
+    fallback_auto: true
+    fallback_readability: true
+    min_content_length: 30
+
+  attachments:
+    enabled: false
+    selectors: []
+    allowed_extensions: []
+    max_bytes: 52428800
+
+  classification:
+    default_type: zhongbiao
+    zhongbiao_keywords: []
+
+  area_extraction:
+    enabled: true
+    use_title_first: true
+
+  output:
+    enabled: true
+    queue_zhaobiao: zhaobiao:result:zhaobiao
+    queue_zhongbiao: zhaobiao:result:zhongbiao
+    attachment_dir_zhaobiao: /root/pachong/zhaobiao/data/附件
+    attachment_dir_zhongbiao: /root/pachong/zhaobiao/data_zb/附件

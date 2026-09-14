@@ -1,0 +1,285 @@
+# 中船集团采购电子商务平台（中国船舶集团 CSEMC 电子采购/物资采购平台）
+# 主站 https://www.ebuycsemc.com/ —— Vue SPA（history 模式），列表/详情全部走后端 JSON 接口。
+#
+# ============================ 站点可达性 ============================
+# 任务下发时称 https://www.ebuycsemc.com/ 返回 curl 000（连接失败）。本次实测已可达，
+# 直连与走系统代理(127.0.0.1:7890)均返回 200，DNS 解析 183.242.178.10。
+# 详见 search_website/csemc_notes.md 的排查记录。
+#
+# ============================ 平台栏目与接口 ============================
+# 首页导航（GET /api-user/website/getWebInfo → navList）：
+#   采购信息 /procurementmsg、通知公告 /informannouncement、管理制度 /sysmanagement、
+#   帮助中心 /helpcenter、关于我们 /aboutour、公示公告 /publicannouncement
+#
+# 【公开可抓】本配置文件只覆盖这两个「列表 + 详情 + 附件」全链路公开的栏目：
+#   1) 通知公告   GET /api-user/platformInformation/getOpenNoticeList?infoType=1&...
+#      详情（公开）GET /api-user/platformInformation/informations/detail/{id}?type=1
+#          → data.content 为 HTML 正文，data.publishTime 为日期，data.files 为附件
+#   2) 公示公告   GET /api-user/platformInformation/getOpenNoticeList?infoType=4
+#      （当前 infoType=4 返回 total=0，站点该栏目暂无数据；配置保留，站点补数据即自动产出）
+#   infoType 实测分布：1→20、2→6（操作手册）、5→1、7→10（系统公告）、
+#                     3/4/6/8/9/10/11/12→0
+#
+# 【已确认受阻，故未配置】采购信息 /procurementmsg（询价公告/谈判公告）与公示公告
+#   /publicannouncement（采购结果公示）的列表接口公开：
+#     GET /api-base/purchaseInfomation/list?pageNum=&pageSize=&businessTypeArr=<类型>
+#     businessTypeArr 实测：IQ_INQUIRY 公开询价(385,885 条)、
+#                          IQ_INQUIRY_COMPETE 公开谈判(50,607 条)、
+#                          RP_PLANNING 直接采购(13,867 条)、
+#                          RESP_PLANNING 供应商寻源(4,173 条)、
+#                          PUR_RESULT 询价结果(355,404 条)
+#   但其详情接口一律 401 未登录（故本文件不配置，避免产出空正文记录）：
+#     GET /api-purchase/inquiry/home/inquiry?inquCode=<businessCode>&withMate=false   → 401
+#     GET /api-purchase/respPlanning/doorDetail?respPlanNo=<businessId>               → 401
+#   证据见 search_website/csemc_notes.md。
+
+- id: csemc_ebuy_notice
+  enabled: true
+  name: 中船集团采购电子商务平台-通知公告
+  entry_urls:
+    - https://www.ebuycsemc.com/api-user/platformInformation/getOpenNoticeList
+
+  schedule:
+    enabled: true
+    interval_seconds: 3600
+
+  limits:
+    max_concurrency: 3
+    request_interval_seconds: 0.4
+
+  request:
+    method: GET
+    headers:
+      Accept: application/json, text/plain, */*
+      Referer: https://www.ebuycsemc.com/
+    # infoType=1 即「通知公告」栏目；custCode/platformType/userType 为该站门户固定值
+    params:
+      infoType: 1
+      pageSize: 20
+      custCode: 10000000
+      platformType: 1
+      userType: T
+    timeout_seconds: 40
+    retries: 2
+    retry_backoff_seconds: 0.8
+    # 该站 HTTPS 存在 TLS 重协商（schannel: remote party requests renegotiation），
+    # curl/requests 可正常完成；证书校验保持关闭以规避其证书链兼容问题
+    verify_ssl: false
+
+  pagination:
+    mode: page_param
+    page_param: pageNum
+    start_page: 1
+    end_page: 3
+
+  crypto:
+    enabled: false
+
+  detail_request:
+    method: GET
+    # 公开详情接口：正文 HTML 在 data.content，日期在 data.publishTime，附件在 data.files
+    url_template: "https://www.ebuycsemc.com/api-user/platformInformation/informations/detail/{value}?type=1"
+
+  cookie:
+    enabled: false
+
+  dedup:
+    redis_hash_key: zhaobiao:domian:linkqc
+    ttl_days: 30
+    prune_probability: 0.01
+
+  list_extraction:
+    response_html_selectors: []
+    item_selectors:
+      - kind: jsonpath
+        expr: $.dataList[*]
+    link_selectors:
+      - kind: jsonpath
+        expr: $.id
+    title_selectors:
+      - kind: jsonpath
+        expr: $.title
+    date_selectors:
+      - kind: jsonpath
+        expr: $.publishTime
+    # 原文链接指向人类可读的公告页（hash 路由），正文仍从公开详情接口取
+    detail_url_template: "https://www.ebuycsemc.com/#/informannouncement/informNewDetail?id={id}&type=1"
+    min_title_length: 6
+    fallback_auto: false
+
+  detail_extraction:
+    response_html_selectors:
+      - kind: jsonpath
+        expr: $.data.content
+    content_selectors:
+      - kind: xpath
+        expr: //body
+      - kind: xpath
+        expr: //div
+    title_selectors:
+      - kind: jsonpath
+        expr: $.data.title
+    date_selectors:
+      - kind: jsonpath
+        expr: $.data.publishTime
+    fallback_auto: true
+    fallback_readability: false
+    min_content_length: 30
+
+  attachments:
+    enabled: true
+    # 附件有两种存在形式，且互斥（同一条公告只会命中其一）：
+    #   1) 结构化：详情 JSON 的 data.files[*].fileId（页面上作为「附件」列表展示）
+    #   2) 内联  ：正文 HTML 里直接写 <a href="/api-base/fileUpload/download/{fileId}">xx.pdf</a>
+    selectors:
+      - kind: jsonpath
+        expr: $.data.files[*].fileId
+      - kind: regex
+        expr: /api-base/fileUpload/download/([A-Za-z0-9]+)
+    filename_selectors:
+      - kind: jsonpath
+        expr: $.data.files[*].fileName
+    url_template: "https://www.ebuycsemc.com/base/api-base/fileUpload/download/{value}"
+    # 该站的下载地址形如 /base/api-base/fileUpload/download/{fileId}，**不含扩展名**
+    # （站点自身前端也这样拼），故不能按扩展名过滤，置空表示全部放行；
+    # 文件名由上面的 filename_selectors 提供（$.data.files[*].fileName），
+    # 内联附件则回退用 URL basename，并由服务端 Content-Disposition 提供真实文件名。
+    allowed_extensions: []
+    max_bytes: 52428800
+
+  classification:
+    # 通知公告为采购/规则/评审通知类，统一按招标类归档，不做关键词二次判定
+    default_type: zhaobiao
+    zhongbiao_keywords: []
+
+  area_extraction:
+    enabled: true
+    use_title_first: true
+
+  output:
+    enabled: true
+    queue_zhaobiao: zhaobiao:result:zhaobiao
+    queue_zhongbiao: zhaobiao:result:zhongbiao
+    attachment_dir_zhaobiao: /root/pachong/zhaobiao/data/附件
+    attachment_dir_zhongbiao: /root/pachong/zhaobiao/data_zb/附件
+
+- id: csemc_ebuy_publicity
+  enabled: true
+  name: 中船集团采购电子商务平台-公示公告
+  entry_urls:
+    - https://www.ebuycsemc.com/api-user/platformInformation/getOpenNoticeList
+
+  schedule:
+    enabled: true
+    interval_seconds: 3600
+
+  limits:
+    max_concurrency: 3
+    request_interval_seconds: 0.4
+
+  request:
+    method: GET
+    headers:
+      Accept: application/json, text/plain, */*
+      Referer: https://www.ebuycsemc.com/
+    # infoType=4 即「公示公告」栏目（当前站点 total=0，暂无数据）
+    params:
+      infoType: 4
+      pageSize: 20
+      custCode: 10000000
+      platformType: 1
+      userType: T
+    timeout_seconds: 40
+    retries: 2
+    retry_backoff_seconds: 0.8
+    verify_ssl: false
+
+  pagination:
+    mode: page_param
+    page_param: pageNum
+    start_page: 1
+    end_page: 3
+
+  crypto:
+    enabled: false
+
+  detail_request:
+    method: GET
+    url_template: "https://www.ebuycsemc.com/api-user/platformInformation/informations/detail/{value}?type=1"
+
+  cookie:
+    enabled: false
+
+  dedup:
+    redis_hash_key: zhaobiao:domian:linkqc
+    ttl_days: 30
+    prune_probability: 0.01
+
+  list_extraction:
+    response_html_selectors: []
+    item_selectors:
+      - kind: jsonpath
+        expr: $.dataList[*]
+    link_selectors:
+      - kind: jsonpath
+        expr: $.id
+    title_selectors:
+      - kind: jsonpath
+        expr: $.title
+    date_selectors:
+      - kind: jsonpath
+        expr: $.publishTime
+    detail_url_template: "https://www.ebuycsemc.com/#/publicannouncement/publicNewDetail?id={id}&type=1"
+    min_title_length: 6
+    fallback_auto: false
+
+  detail_extraction:
+    response_html_selectors:
+      - kind: jsonpath
+        expr: $.data.content
+    content_selectors:
+      - kind: xpath
+        expr: //body
+      - kind: xpath
+        expr: //div
+    title_selectors:
+      - kind: jsonpath
+        expr: $.data.title
+    date_selectors:
+      - kind: jsonpath
+        expr: $.data.publishTime
+    fallback_auto: true
+    fallback_readability: false
+    min_content_length: 30
+
+  attachments:
+    enabled: true
+    # 同 csemc_ebuy_notice：结构化 data.files[*].fileId 与正文内联下载链接两种形式
+    selectors:
+      - kind: jsonpath
+        expr: $.data.files[*].fileId
+      - kind: regex
+        expr: /api-base/fileUpload/download/([A-Za-z0-9]+)
+    filename_selectors:
+      - kind: jsonpath
+        expr: $.data.files[*].fileName
+    url_template: "https://www.ebuycsemc.com/base/api-base/fileUpload/download/{value}"
+    # 同上：下载地址不含扩展名，置空以放行全部附件
+    allowed_extensions: []
+    max_bytes: 52428800
+
+  classification:
+    # 公示公告为结果/评审/处理结果公示，固定按中标类归档
+    default_type: zhongbiao
+    zhongbiao_keywords: []
+
+  area_extraction:
+    enabled: true
+    use_title_first: true
+
+  output:
+    enabled: true
+    queue_zhaobiao: zhaobiao:result:zhaobiao
+    queue_zhongbiao: zhaobiao:result:zhongbiao
+    attachment_dir_zhaobiao: /root/pachong/zhaobiao/data/附件
+    attachment_dir_zhongbiao: /root/pachong/zhaobiao/data_zb/附件

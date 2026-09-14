@@ -1,4 +1,4 @@
-﻿import os
+import os
 import re
 import time
 from datetime import date, datetime
@@ -83,6 +83,18 @@ def normalize_date_yyyy_mm_dd(raw, default_date=None):
             return datetime.strptime(value, fmt).date().isoformat()
         except ValueError:
             continue
+
+    # 秒级(10位)/毫秒级(13位) Unix 时间戳（接口常见返回）
+    if re.match(r"^\d{13}$", value):
+        try:
+            return datetime.fromtimestamp(int(value) / 1000.0).date().isoformat()
+        except (ValueError, OSError, OverflowError):
+            pass
+    if re.match(r"^\d{10}$", value):
+        try:
+            return datetime.fromtimestamp(int(value)).date().isoformat()
+        except (ValueError, OSError, OverflowError):
+            pass
 
     m = re.search(r"(\d{4})\D?(\d{1,2})\D?(\d{1,2})", value)
     if m:

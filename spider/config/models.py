@@ -103,6 +103,9 @@ class DetailRequestConfig(BaseModel):
     method: str = "GET"
     # 详情接口地址；为空时回退到 entry_urls[0]。
     url: Optional[str] = None
+    # 详情接口地址模板，支持 {value}/{link}（列表项链接原值）与 {title} 占位符。
+    # 用途：列表项 item.url 保留人类可读页面作为「原文链接」，正文改从接口抓取。
+    url_template: Optional[str] = None
     # 内层 JSON 请求体模板，支持 {link}（列表项的详情链接，即 infoID）与 {title} 占位符。
     body_template: Optional[str] = None
     # 表单（application/x-www-form-urlencoded）请求体模板，支持 {link} 与 {title} 占位符。
@@ -180,6 +183,9 @@ class AttachmentConfig(BaseModel):
     selectors: List[Selector] = Field(default_factory=list)
     # 附件文件名提取规则（与 selectors 按位置对齐）；为空时回退到 URL 路径 basename
     filename_selectors: List[Selector] = Field(default_factory=list)
+    # 附件 URL 模板，{value} 为选择器取到的原始值。
+    # 用于「固定前缀 + 字段值」拼接（如 OSS 直链、协议相对 //host/path 补 https:）。
+    url_template: Optional[str] = None
     allowed_extensions: List[str] = Field(
         default_factory=lambda: [".pdf", ".doc", ".docx", ".xls", ".xlsx", ".zip", ".rar", ".txt"]
     )

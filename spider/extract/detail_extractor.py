@@ -33,8 +33,15 @@ class DetailExtractor(object):
         if tree is None:
             return DetailExtractResult(content="", attachment_urls=[])
 
-        detail_title = self._extract_title_by_rules(tree, content_html)
-        detail_date = self._extract_date_by_rules(tree, content_html)
+        # 标题/日期选择器针对**原始响应**取（响应是 JSON 时才能用 jsonpath 命中字段），
+        # 正文选择器针对预处理后的 content_html 取。
+        meta_tree = tree
+        if self.detail_cfg.response_html_selectors:
+            candidate = html_tree(raw_text)
+            if candidate is not None:
+                meta_tree = candidate
+        detail_title = self._extract_title_by_rules(meta_tree, raw_text)
+        detail_date = self._extract_date_by_rules(meta_tree, raw_text)
         content = self._extract_content_by_rules(tree, content_html)
         if (not self.to_plain_text(content) or len(self.to_plain_text(content)) < self.detail_cfg.min_content_length) and self.detail_cfg.fallback_auto:
             content = self._extract_content_by_auto(tree)
@@ -176,7 +183,10 @@ class DetailExtractor(object):
             if not raw:
                 continue
             normalized_raw = normalize_space(str(raw)).replace("\\/", "/")
-            url = resolve_url(base_url, normalized_raw)
+            if self.attachment_cfg.url_template:
+                url = self.attachment_cfg.url_template.replace("{value}", normalized_raw)
+            else:
+                url = resolve_url(base_url, normalized_raw)
             lower = url.lower()
             if lower.startswith("javascript"):
                 continue

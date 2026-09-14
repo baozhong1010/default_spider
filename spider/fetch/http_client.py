@@ -84,6 +84,14 @@ class HttpFetcher(object):
                     response = self._fetch_chrome(req)
                 else:
                     response = self._do_fetch(req, headers)
+                # 少数接口会偶发返回 200 + 空响应体（连接被中断但状态码正常），
+                # 这种响应后续必然解析失败，当作可重试错误处理。
+                if (
+                    response.status_code == 200
+                    and not response.content
+                    and attempt < req.retries
+                ):
+                    raise RuntimeError("empty response body on HTTP 200 (retrying)")
                 cost = round(time.time() - start, 3)
                 log_event(
                     self.logger,

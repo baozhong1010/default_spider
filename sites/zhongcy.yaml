@@ -1,0 +1,352 @@
+﻿# 京华云采-北京市政府采购电子卖场（中采云/京东中采云系，域名 mkt-bjzc.zhongcy.com）
+# 站点性质：政府采购电子卖场（电商采购商城），带公开的「信息公告」栏目（无需登录）。
+#
+# 列表接口（前端 /mall-view/js/noticeList.js:303）：
+#   GET {origin}/proxy/platform/platform/notice/queryMallNoticePageList
+#        ?pageSize=&pageNum=&noticeStatus=10&noticeTypes=<1|3,4|8>&noticeTypeNos=10,15,2,5,9,11,14,16
+#   base_server='/proxy' + platform_server='/platform'（见 /mall-view/module/config.js:32,71）
+#   公告类型 noticeType：1=采购需求公告 3=结果公告-中标公告 4=结果公告-成交公告
+#                        6=结果公告-变更公告 7=终止公告 8=废标公告 12=政策法规 13=新闻通知
+# 详情接口（前端 /mall-view/information/detail 页内 getNotice()）：
+#   GET {origin}/proxy/platform/platform/notice/queryMallNoticeById?platformId=20&id=<noticeId>
+#   返回 JSON，正文 HTML 在 data.contentStr（data.pdfUrl 为同公告 PDF 版，data.contentUrl 为文本版，
+#   两者都是协议相对地址 //host/path，已用 attachments.url_template: "https:{value}" 提取下载）
+
+- id: zhongcy_cgxq
+  enabled: true
+  name: 京华云采（北京中采商城）-采购需求公告
+  entry_urls:
+    - https://mkt-bjzc.zhongcy.com/proxy/platform/platform/notice/queryMallNoticePageList
+
+  schedule:
+    enabled: true
+    interval_seconds: 3600
+
+  limits:
+    # 该站详情接口偶发返回 200+空响应体（框架只在异常时重试），降低并发+限速可显著减少
+    max_concurrency: 2
+    request_interval_seconds: 1.0
+
+  request:
+    method: GET
+    headers:
+      Referer: https://mkt-bjzc.zhongcy.com/mall-view/information/noticeList/
+      Accept: application/json, text/javascript, */*; q=0.01
+      X-Requested-With: XMLHttpRequest
+    params:
+      pageSize: 10
+      noticeStatus: 10
+      noticeTypes: '1'
+      noticeTypeNos: 10,15,2,5,9,11,14,16
+    timeout_seconds: 40
+    retries: 2
+    retry_backoff_seconds: 0.8
+    verify_ssl: true
+
+  pagination:
+    mode: page_param
+    page_param: pageNum
+    start_page: 1
+    end_page: 3
+
+  crypto:
+    enabled: false
+
+  detail_request:
+    method: GET
+    # 正文走 JSON 详情接口；item.url 保留人类可读的公告页面作为「原文链接」
+    url_template: "https://mkt-bjzc.zhongcy.com/proxy/platform/platform/notice/queryMallNoticeById?platformId=20&id={value}"
+
+  cookie:
+    enabled: false
+
+  dedup:
+    redis_hash_key: zhaobiao:domian:linkqc
+    ttl_days: 30
+    prune_probability: 0.01
+
+  list_extraction:
+    response_html_selectors: []
+    item_selectors:
+      - kind: jsonpath
+        expr: $.data.result[*]
+    link_selectors:
+      - kind: jsonpath
+        expr: $.id
+    title_selectors:
+      - kind: jsonpath
+        expr: $.noticeTitle
+    date_selectors:
+      - kind: jsonpath
+        expr: $.publishTimeStr
+    detail_url_template: "https://mkt-bjzc.zhongcy.com/mall-view/information/detail?noticeId={id}"
+    min_title_length: 6
+    fallback_auto: false
+
+  detail_extraction:
+    # 详情接口返回 JSON，正文 HTML 在 data.contentStr；先取出该字段再按 HTML 解析
+    response_html_selectors:
+      - kind: jsonpath
+        expr: $.data.contentStr
+    content_selectors:
+      - kind: xpath
+        expr: //body
+    fallback_auto: true
+    fallback_readability: false
+    min_content_length: 30
+
+  attachments:
+    enabled: true
+    # 公告 PDF/正文文件地址在详情 JSON 的 pdfUrl / contentUrl 字段里（协议相对 //host/path）
+    selectors:
+      - kind: jsonpath
+        expr: $.data.pdfUrl
+      - kind: jsonpath
+        expr: $.data.contentUrl
+    url_template: "https:{value}"
+    allowed_extensions:
+      - .pdf
+      - .txt
+    max_bytes: 52428800
+
+  classification:
+    default_type: zhaobiao
+    zhongbiao_keywords: []
+
+  area_extraction:
+    enabled: true
+    fixed_value: 北京
+    use_title_first: true
+
+  output:
+    enabled: true
+    queue_zhaobiao: zhaobiao:result:zhaobiao
+    queue_zhongbiao: zhaobiao:result:zhongbiao
+    attachment_dir_zhaobiao: /root/pachong/zhaobiao/data/附件
+    attachment_dir_zhongbiao: /root/pachong/zhaobiao/data_zb/附件
+
+- id: zhongcy_jggg
+  enabled: true
+  name: 京华云采（北京中采商城）-结果公告（中标/成交）
+  entry_urls:
+    - https://mkt-bjzc.zhongcy.com/proxy/platform/platform/notice/queryMallNoticePageList
+
+  schedule:
+    enabled: true
+    interval_seconds: 3600
+
+  limits:
+    # 该站详情接口偶发返回 200+空响应体（框架只在异常时重试），降低并发+限速可显著减少
+    max_concurrency: 2
+    request_interval_seconds: 1.0
+
+  request:
+    method: GET
+    headers:
+      Referer: https://mkt-bjzc.zhongcy.com/mall-view/information/noticeList/
+      Accept: application/json, text/javascript, */*; q=0.01
+      X-Requested-With: XMLHttpRequest
+    params:
+      pageSize: 10
+      noticeStatus: 10
+      # 3=结果公告-中标公告（该平台当前 0 条）、4=结果公告-成交公告
+      noticeTypes: '3,4'
+      noticeTypeNos: 10,15,2,5,9,11,14,16
+    timeout_seconds: 40
+    retries: 2
+    retry_backoff_seconds: 0.8
+    verify_ssl: true
+
+  pagination:
+    mode: page_param
+    page_param: pageNum
+    start_page: 1
+    end_page: 3
+
+  crypto:
+    enabled: false
+
+  detail_request:
+    method: GET
+    # 正文走 JSON 详情接口；item.url 保留人类可读的公告页面作为「原文链接」
+    url_template: "https://mkt-bjzc.zhongcy.com/proxy/platform/platform/notice/queryMallNoticeById?platformId=20&id={value}"
+
+  cookie:
+    enabled: false
+
+  dedup:
+    redis_hash_key: zhaobiao:domian:linkqc
+    ttl_days: 30
+    prune_probability: 0.01
+
+  list_extraction:
+    response_html_selectors: []
+    item_selectors:
+      - kind: jsonpath
+        expr: $.data.result[*]
+    link_selectors:
+      - kind: jsonpath
+        expr: $.id
+    title_selectors:
+      - kind: jsonpath
+        expr: $.noticeTitle
+    date_selectors:
+      - kind: jsonpath
+        expr: $.publishTimeStr
+    detail_url_template: "https://mkt-bjzc.zhongcy.com/mall-view/information/detail?noticeId={id}"
+    min_title_length: 6
+    fallback_auto: false
+
+  detail_extraction:
+    response_html_selectors:
+      - kind: jsonpath
+        expr: $.data.contentStr
+    content_selectors:
+      - kind: xpath
+        expr: //body
+    fallback_auto: true
+    fallback_readability: false
+    min_content_length: 30
+
+  attachments:
+    enabled: true
+    # 公告 PDF/正文文件地址在详情 JSON 的 pdfUrl / contentUrl 字段里（协议相对 //host/path）
+    selectors:
+      - kind: jsonpath
+        expr: $.data.pdfUrl
+      - kind: jsonpath
+        expr: $.data.contentUrl
+    url_template: "https:{value}"
+    allowed_extensions:
+      - .pdf
+      - .txt
+    max_bytes: 52428800
+
+  classification:
+    default_type: zhongbiao
+    zhongbiao_keywords: []
+
+  area_extraction:
+    enabled: true
+    fixed_value: 北京
+    use_title_first: true
+
+  output:
+    enabled: true
+    queue_zhaobiao: zhaobiao:result:zhaobiao
+    queue_zhongbiao: zhaobiao:result:zhongbiao
+    attachment_dir_zhaobiao: /root/pachong/zhaobiao/data/附件
+    attachment_dir_zhongbiao: /root/pachong/zhaobiao/data_zb/附件
+
+- id: zhongcy_fbgg
+  enabled: true
+  name: 京华云采（北京中采商城）-废标公告
+  entry_urls:
+    - https://mkt-bjzc.zhongcy.com/proxy/platform/platform/notice/queryMallNoticePageList
+
+  schedule:
+    enabled: true
+    interval_seconds: 3600
+
+  limits:
+    # 该站详情接口偶发返回 200+空响应体（框架只在异常时重试），降低并发+限速可显著减少
+    max_concurrency: 2
+    request_interval_seconds: 1.0
+
+  request:
+    method: GET
+    headers:
+      Referer: https://mkt-bjzc.zhongcy.com/mall-view/information/noticeList/
+      Accept: application/json, text/javascript, */*; q=0.01
+      X-Requested-With: XMLHttpRequest
+    params:
+      pageSize: 10
+      noticeStatus: 10
+      noticeTypes: '8'
+      noticeTypeNos: 10,15,2,5,9,11,14,16
+    timeout_seconds: 40
+    retries: 2
+    retry_backoff_seconds: 0.8
+    verify_ssl: true
+
+  pagination:
+    mode: page_param
+    page_param: pageNum
+    start_page: 1
+    end_page: 3
+
+  crypto:
+    enabled: false
+
+  detail_request:
+    method: GET
+    # 正文走 JSON 详情接口；item.url 保留人类可读的公告页面作为「原文链接」
+    url_template: "https://mkt-bjzc.zhongcy.com/proxy/platform/platform/notice/queryMallNoticeById?platformId=20&id={value}"
+
+  cookie:
+    enabled: false
+
+  dedup:
+    redis_hash_key: zhaobiao:domian:linkqc
+    ttl_days: 30
+    prune_probability: 0.01
+
+  list_extraction:
+    response_html_selectors: []
+    item_selectors:
+      - kind: jsonpath
+        expr: $.data.result[*]
+    link_selectors:
+      - kind: jsonpath
+        expr: $.id
+    title_selectors:
+      - kind: jsonpath
+        expr: $.noticeTitle
+    date_selectors:
+      - kind: jsonpath
+        expr: $.publishTimeStr
+    detail_url_template: "https://mkt-bjzc.zhongcy.com/mall-view/information/detail?noticeId={id}"
+    min_title_length: 6
+    fallback_auto: false
+
+  detail_extraction:
+    response_html_selectors:
+      - kind: jsonpath
+        expr: $.data.contentStr
+    content_selectors:
+      - kind: xpath
+        expr: //body
+    fallback_auto: true
+    fallback_readability: false
+    min_content_length: 30
+
+  attachments:
+    enabled: true
+    # 公告 PDF/正文文件地址在详情 JSON 的 pdfUrl / contentUrl 字段里（协议相对 //host/path）
+    selectors:
+      - kind: jsonpath
+        expr: $.data.pdfUrl
+      - kind: jsonpath
+        expr: $.data.contentUrl
+    url_template: "https:{value}"
+    allowed_extensions:
+      - .pdf
+      - .txt
+    max_bytes: 52428800
+
+  classification:
+    # 废标/终止类属于结果公告，按 zhongbiao 归档
+    default_type: zhongbiao
+    zhongbiao_keywords: []
+
+  area_extraction:
+    enabled: true
+    fixed_value: 北京
+    use_title_first: true
+
+  output:
+    enabled: true
+    queue_zhaobiao: zhaobiao:result:zhaobiao
+    queue_zhongbiao: zhaobiao:result:zhongbiao
+    attachment_dir_zhaobiao: /root/pachong/zhaobiao/data/附件
+    attachment_dir_zhongbiao: /root/pachong/zhaobiao/data_zb/附件

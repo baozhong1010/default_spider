@@ -1,6 +1,16 @@
 # 国铁采购平台（cg.95306.cn）采购公告类站点
 # 列表接口：POST /proxy/portal/elasticSearch/queryProcurementNoticeList（表单）
 # 详情接口：POST /proxy/portal/elasticSearch/indexView（表单，noticeId）
+#
+# 分页/排序参数说明（勿随意改动，2026-09 实测确认）：
+# - sortCondition=1 才是「发布时间排序」（对应前端 #sortCondition 复选框，勾选时传 1）。
+#   传 0 时接口返回的是默认相关度顺序的固定切片，新公告几乎不会进入该切片，
+#   表现为「只能抓到某一天之前的数据，之后的抓不到」。
+# - pageNum 从 1 开始（前端默认 '1'）。传 0 会被服务端归一为第 1 页，
+#   若用 {page_index}（0,1,2）会重复抓第 1 页，导致 3 页只能得到 20 条去重记录。
+# - mhId 传随机值即可（接口不校验其格式），无需真实浏览器指纹。
+# - 请求过快时接口会返回 {"success": false, "code": "0-0203"}（HTTP 仍是 200），
+#   需保持 limits.request_interval_seconds 间隔，避免被判为限流。
 
 - id: cg95306_zbgg
   enabled: true
@@ -32,7 +42,7 @@
     mode: data_template
     start_page: 1
     end_page: 3
-    data_template: "mhId={random}&Authorization=&projBidType=01&bidType=&noticeType=01&wzType=&title=&unitType=&inforCode=&startDate=&endDate=&pageNum={page_index}&projType=01&createPeopUnit=&sortCondition=0"
+    data_template: "mhId={random}&Authorization=&projBidType=01&bidType=&noticeType=01&wzType=&title=&unitType=&inforCode=&startDate=&endDate=&pageNum={page}&projType=01&createPeopUnit=&sortCondition=1"
 
   detail_request:
     method: POST
@@ -132,7 +142,7 @@
     mode: data_template
     start_page: 1
     end_page: 3
-    data_template: "mhId={random}&Authorization=&projBidType=01&bidType=&noticeType=02&wzType=&title=&unitType=&inforCode=&startDate=&endDate=&pageNum={page_index}&projType=01&createPeopUnit=&sortCondition=0"
+    data_template: "mhId={random}&Authorization=&projBidType=01&bidType=&noticeType=02&wzType=&title=&unitType=&inforCode=&startDate=&endDate=&pageNum={page}&projType=01&createPeopUnit=&sortCondition=1"
 
   detail_request:
     method: POST
@@ -232,7 +242,7 @@
     mode: data_template
     start_page: 1
     end_page: 3
-    data_template: "mhId={random}&Authorization=&projBidType=01&bidType=&noticeType=03&wzType=&title=&unitType=&inforCode=&startDate=&endDate=&pageNum={page_index}&projType=01&createPeopUnit=&sortCondition=0"
+    data_template: "mhId={random}&Authorization=&projBidType=01&bidType=&noticeType=03&wzType=&title=&unitType=&inforCode=&startDate=&endDate=&pageNum={page}&projType=01&createPeopUnit=&sortCondition=1"
 
   detail_request:
     method: POST

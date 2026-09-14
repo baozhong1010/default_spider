@@ -1,0 +1,296 @@
+# 金采商城（中金金采商城）- www.e-shop.cfcpn.com
+# ---------------------------------------------------------------------------
+# 站点性质判定（证据见 search_website/eshop_notes.md）：
+#   * 无头 Chrome 载入 http://www.e-shop.cfcpn.com/#/mall 后 document.title = 「金采商城」，
+#     footerContent = 「中金金采商城」，技术支持：数采小博科技发展有限公司，租户 tenantId=10002288。
+#     故本站是「金采商城」电子商城 SPA（国泰新点/G-CLOUD 系品牌商城），不是中国兵器/中兵采购。
+#   * 商城首页 XHR 抓包显示公告组件调用
+#       POST /serv/system-service/api/article/getWorkArticlesWithParams  -> {"code":-100,"message":"请登录!"}
+#     因此商城自己的「通知公告」栏目匿名不可读。
+#   * 唯一匿名可读的公告接口是商城埋的「招投标适配器」：
+#       POST /bondqcd/api/ny/getNoticeList?noticeType=<5位类型码>
+#     返回公告标题/地区/项目编号/采购人/代理机构/时间，以及 base64 编码的正文 noticeContent。
+#     类型码实测：001021(中标(成交)结果公告)=1条；001031,001032(采购更正公告)=3条；
+#     001011/001013/001014/001016(采购/招标公告类) 全部返回空数组。
+#   * 该接口无分页能力（page/pageSize/pageNum 均被忽略，一次返回全部记录），
+#     且不存在按 id/GUID 取单条的详情接口（getNoticeById/getNoticeInfo/... 均 500）。
+#   * 记录自带 originalNoticeUrl 指向 http://gcycloud.cn/...，实测 502/404，已失效。
+#
+# 结论：本站在线内容极少且是历史测试数据（采购人=南阳商祺数贸科技有限公司/南阳淯龙投资开发有限公司，
+#       区域=南阳交投区划）。据此只配置确实有数据的两个公告类型，不臆造招标公告栏目。
+#
+# ⚠️ 已知局限（实测，非配置错误）：
+#   1) noticeContent 是 base64(HTML)。框架无任何 base64 解码能力（config/models.py 无相关字段，
+#      extract/selector_engine.py 只做 jsonpath/xpath/css/regex 取值），所以「正文内容」字段
+#      落地的是那段 base64 原文（外面套了一层 <body><p>…</p></body>），人不可读。
+#      已实测：该 base64 用 base64 解码后是完整可读的公告 HTML（含表格/正文），
+#      也就是说数据本身没问题，只是框架这一层缺解码能力。解码后正文约 4385 字（标题为
+#      「…商祺网集中采购网上商城系统委托开发项目中标（成交）结果公告」）。
+#   2) 该适配器接口没有「按 id/GUID 取单条」的详情接口（getNoticeById/getNoticeInfo/
+#      getNoticeDetail/queryNoticeList 全部 500），只有按 5 位栏目码整批返回；
+#      所以详情请求只能回到同一个整批接口，detail_extraction 里使用 $.data[0] 取第 0 条。
+#      当某栏目返回多条时（如 001031,001032 有 3 条），所有记录的正文都会是第 0 条那篇，
+#      这是该站点缺陷 + 框架能力边界共同导致，无法用配置消除。列表中【标题/日期/地区/链接】
+#      均为各自记录的正确值，只有「正文内容」受此影响。
+#   3) 记录自带的 originalNoticeUrl（http://gcycloud.cn/...）已失效（502/404），不能作为原文链接，
+#      故原文链接统一指向商城的「通知公告」页 http://www.e-shop.cfcpn.com/#/notice?noticeGuid=<GUID>。
+#   4) 原文链接必须带 noticeGuid：ListExtractor 会按最终 item.url 去重（list_extractor.py:38-42），
+#      若同一栏目所有记录 URL 相同，多条的栏目只会剩下 1 条（已实测：001031,001032 由 3 条变 1 条）。
+# ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# ⚠️ 本配置当前状态：enabled: false（停用，仅作分析留存）
+#    原因：平台实质为空站——全部 19 个栏目码中仅「结果公告」1 条、「变更公告」3 条，
+#    且均为 2023 年历史测试数据（有一条标题即「测试项目20230113」）；
+#    正文 noticeContent 为 base64(HTML)，框架无解码能力，落库会是不可读的 base64 文本；
+#    该适配器也无按 id 取单条的详情接口（多条栏目会共用第 0 条正文）。
+#    若要启用：先确认平台已有真实公告，并给框架补 base64 正文解码能力（如
+#    detail_extraction 增加 content_encoding: base64），再去掉下面的 enabled: false。
+# ---------------------------------------------------------------------------
+
+- id: eshop_zbjg
+  enabled: false
+  name: 金采商城（中金金采商城）-结果公告（中标/成交）
+  entry_urls:
+    # 列表/详情均为同一个适配器接口，noticeType 决定栏目
+    - http://www.e-shop.cfcpn.com/bondqcd/api/ny/getNoticeList?noticeType=001021
+
+  schedule:
+    enabled: true
+    interval_seconds: 3600
+
+  limits:
+    max_concurrency: 1
+    request_interval_seconds: 0.5
+
+  request:
+    method: POST
+    headers:
+      # 该站 Server: Boss_service 会对无 UA 的请求直接 403，UA 必填
+      Accept: application/json, text/plain, */*
+      Content-Type: application/json;charset=UTF-8
+      Origin: http://www.e-shop.cfcpn.com
+      Referer: http://www.e-shop.cfcpn.com/
+    # 适配器接口要求 POST + 空 JSON body（GET 亦可，但保持与前端一致）
+    json: {}
+    timeout_seconds: 40
+    retries: 2
+    retry_backoff_seconds: 0.8
+    verify_ssl: false
+    use_chrome: false
+
+  pagination:
+    # 该接口一次性返回全部记录，忽略 page/pageSize/pageNum，无分页可言
+    mode: none
+    start_page: 1
+    end_page: 3
+
+  crypto:
+    enabled: false
+
+  detail_request:
+    method: POST
+    # 无单条详情接口：正文只存在于列表响应的 noticeContent 字段。
+    # 关键点：这里必须用 url_template（而不是 url + body_template）。
+    # engine.py:277 的 body_template 分支会忽略 url_template、固定请求 detail_request.url，
+    # 导致同栏目所有记录都拿到「同一条」正文（实测 3 条记录标题/日期/正文全等于第 0 条）；
+    # url_template 分支（engine.py:291）才会按每条记录的 {value}/{link} 逐个请求。
+    # 注意：raw_url 是列表里取到的 noticeGuid，所以这里用 {value} 拼不出栏目接口地址，
+    # 该站点因此把「详情请求」固定为同一栏目接口、正文取 $.data[0]，仅第 0 条记录正文精确。
+    url_template: "http://www.e-shop.cfcpn.com/bondqcd/api/ny/getNoticeList?noticeType=001021"
+
+  cookie:
+    enabled: false
+
+  dedup:
+    redis_hash_key: zhaobiao:domian:linkqc
+    ttl_days: 30
+    prune_probability: 0.01
+
+  list_extraction:
+    response_html_selectors: []
+    item_selectors:
+      - kind: jsonpath
+        expr: $.data[*]
+    link_selectors:
+      - kind: jsonpath
+        expr: $.noticeGuid
+    title_selectors:
+      - kind: jsonpath
+        expr: $.noticeName
+    date_selectors:
+      # 13 位毫秒时间戳，框架会转成 YYYY-MM-DD
+      - kind: jsonpath
+        expr: $.noticeTime
+    area_selectors:
+      # 列表自带地区字段，优先于标题/正文启发式
+      - kind: jsonpath
+        expr: $.regionName
+    # item.url 指向公告在「金采商城」通知公告页的人类可读入口（原文链接）。
+    # 必须带上 {noticeGuid}：ListExtractor 在 _format_detail_url 之后按 item.url 去重
+    # （list_extractor.py:38-42），若 URL 完全一样，同一栏目多条记录只会剩 1 条。
+    # 该 GUID 亦让「原文链接」可追溯到具体公告。
+    detail_url_template: "http://www.e-shop.cfcpn.com/#/notice?noticeGuid={noticeGuid}"
+    min_title_length: 6
+    fallback_auto: false
+
+  detail_extraction:
+    # 详情响应是 JSON，正文所在的 noticeContent 字段先取出来再按 HTML 解析
+    response_html_selectors:
+      - kind: jsonpath
+        expr: $.data[0].noticeContent
+    content_selectors:
+      - kind: xpath
+        expr: //body
+    # 刻意不配 title_selectors / date_selectors：
+    # 该接口整批返回、无法按记录定位，$.data[0] 的标题/日期会被套到每一条记录上，
+    # 把列表里本来正确的逐条标题/日期覆盖掉（已实测）。
+    # 留空则由引擎回填列表的标题与日期（engine.py:559-563），保持逐条正确。
+    fallback_auto: true
+    fallback_readability: false
+    # 阈值保持 30：正文是 base64 原文（人不可读），但长度足够，因此记录会正常发布。
+    # 若下游要求「正文必须可读」，应先停用本配置（enabled:false），等框架补上 base64 解码能力再启用。
+    min_content_length: 30
+
+  attachments:
+    enabled: true
+    # 已确认公告正文内不含任何 href 附件链接，也没有独立附件字段
+    selectors: []
+    url_template: null
+    allowed_extensions:
+      - .pdf
+      - .doc
+      - .docx
+      - .xls
+      - .xlsx
+      - .zip
+      - .rar
+    max_bytes: 52428800
+
+  classification:
+    default_type: zhongbiao
+    zhongbiao_keywords: []
+
+  area_extraction:
+    enabled: true
+    use_title_first: true
+
+  output:
+    enabled: true
+    queue_zhaobiao: zhaobiao:result:zhaobiao
+    queue_zhongbiao: zhaobiao:result:zhongbiao
+    attachment_dir_zhaobiao: /root/pachong/zhaobiao/data/附件
+    attachment_dir_zhongbiao: /root/pachong/zhaobiao/data_zb/附件
+
+- id: eshop_bggg
+  enabled: false
+  name: 金采商城（中金金采商城）-采购更正公告/变更公告
+  entry_urls:
+    - http://www.e-shop.cfcpn.com/bondqcd/api/ny/getNoticeList?noticeType=001031,001032
+
+  schedule:
+    enabled: true
+    interval_seconds: 3600
+
+  limits:
+    max_concurrency: 1
+    request_interval_seconds: 0.5
+
+  request:
+    method: POST
+    headers:
+      Accept: application/json, text/plain, */*
+      Content-Type: application/json;charset=UTF-8
+      Origin: http://www.e-shop.cfcpn.com
+      Referer: http://www.e-shop.cfcpn.com/
+    json: {}
+    timeout_seconds: 40
+    retries: 2
+    retry_backoff_seconds: 0.8
+    verify_ssl: false
+    use_chrome: false
+
+  pagination:
+    mode: none
+    start_page: 1
+    end_page: 3
+
+  crypto:
+    enabled: false
+
+  detail_request:
+    method: POST
+    # 同 eshop_zbjg：必须用 url_template（body_template 分支会忽略它并固定请求一个 URL）
+    url_template: "http://www.e-shop.cfcpn.com/bondqcd/api/ny/getNoticeList?noticeType=001031,001032"
+
+  cookie:
+    enabled: false
+
+  dedup:
+    redis_hash_key: zhaobiao:domian:linkqc
+    ttl_days: 30
+    prune_probability: 0.01
+
+  list_extraction:
+    response_html_selectors: []
+    item_selectors:
+      - kind: jsonpath
+        expr: $.data[*]
+    link_selectors:
+      - kind: jsonpath
+        expr: $.noticeGuid
+    title_selectors:
+      - kind: jsonpath
+        expr: $.noticeName
+    date_selectors:
+      - kind: jsonpath
+        expr: $.noticeTime
+    area_selectors:
+      - kind: jsonpath
+        expr: $.regionName
+    # 同 eshop_zbjg：URL 必须带 {noticeGuid}，否则本栏目 3 条记录会被按 url 去重成 1 条
+    detail_url_template: "http://www.e-shop.cfcpn.com/#/notice?noticeGuid={noticeGuid}"
+    min_title_length: 6
+    fallback_auto: false
+
+  detail_extraction:
+    response_html_selectors:
+      - kind: jsonpath
+        expr: $.data[0].noticeContent
+    content_selectors:
+      - kind: xpath
+        expr: //body
+    # 同 eshop_zbjg：不配 title/date 选择器，避免 $.data[0] 把逐条正确的标题/日期覆盖成同一条
+    fallback_auto: true
+    fallback_readability: false
+    min_content_length: 30
+
+  attachments:
+    enabled: true
+    selectors: []
+    url_template: null
+    allowed_extensions:
+      - .pdf
+      - .doc
+      - .docx
+      - .xls
+      - .xlsx
+      - .zip
+      - .rar
+    max_bytes: 52428800
+
+  classification:
+    # 更正/变更公告属于采购（招标）流程公告，归 zhaobiao
+    default_type: zhaobiao
+    zhongbiao_keywords: []
+
+  area_extraction:
+    enabled: true
+    use_title_first: true
+
+  output:
+    enabled: true
+    queue_zhaobiao: zhaobiao:result:zhaobiao
+    queue_zhongbiao: zhaobiao:result:zhongbiao
+    attachment_dir_zhaobiao: /root/pachong/zhaobiao/data/附件
+    attachment_dir_zhongbiao: /root/pachong/zhaobiao/data_zb/附件

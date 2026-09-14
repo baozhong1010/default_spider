@@ -1,0 +1,142 @@
+﻿# 京东招采供应商协同平台（proc-bidding.jd.com）
+#
+# 平台背景：
+#   - https://vsp.jd.com（京东慧采/VSP）所有业务页面 302 到 /passport/login，必须登录；
+#   - 京东对外公开的招采入口是 https://proc-bidding.jd.com（首页 title「京东招采供应商协同平台」，
+#     由 bidding.jd.com 302 跳转而来），是 Vue SPA，数据全部走 /bizApi REST 接口。
+#
+# 本次配置的栏目：采购信息（前端路由 /publish），对应公开接口
+#   GET https://proc-bidding.jd.com/bizApi/portal/bidPublish/list
+#
+# 关键点（实测）：
+#   1) 该接口无需登录，但必须带 Cookie `tenant.code=PUB`（公开平台租户）。
+#      不带时接口仍返回 200，但只回退成 1 条历史记录（totalPageNum=1），
+#      带上后返回完整数据（totalPageNum=32，每页 10 条）。
+#      该 Cookie 由前端 JS 写入，服务端不会 Set-Cookie，因此这里直接写死在请求头里。
+#   2) 分页参数是 `page` + `limit`，用 url_template 拼 `&page={page}`。
+#   3) 详情接口 /bizApi/portal/bidPublish/detail/{id} 同样是公开 JSON。
+#
+# 未纳入（登录阻断 / 无法静态配置）：
+#   - 中标公告（前端路由 /result）：/bizApi/portal/bidResult/list 固定返回 401，需登录后选租户；
+#   - 新闻动态（前端路由 /openMsg）：走 DragonCMS，需要先调
+#     /cmsApi/api/v1/cms/login 换取 24 小时有效的 dragoncms-token，无法在静态配置里两步取 token；
+#   - /bizApi/portal/notice/list、/portal/tag/list 亦为 401。
+#
+# 附件说明：详情 JSON 的 fileList[] 给出 fileId / bucket / filePath / fileName，
+#   下载直链 = https://storage.360buyimg.com/{bucket}/{filePath}（已提取验证可下到 xlsx），
+#   已用 attachments.selectors(jsonpath) + url_template 配置。
+#   另 /bizApi/portal/file/getFileInfo/{fileId} 亦可下载（备选）。
+
+- id: jdvsp_publish
+  enabled: true
+  name: 京东招采供应商协同平台-采购信息
+  entry_urls:
+    - https://proc-bidding.jd.com/bizApi/portal/bidPublish/list?projectName=&oneType=&limit=10&startDate=&endDate=
+
+  schedule:
+    enabled: true
+    interval_seconds: 3600
+
+  limits:
+    max_concurrency: 3
+    request_interval_seconds: 0.5
+
+  request:
+    method: GET
+    headers:
+      # 公开平台租户标识；缺失会导致接口只返回 1 条降级数据
+      Cookie: tenant.code=PUB
+      Referer: https://proc-bidding.jd.com/publish
+      Accept: application/json, text/plain, */*
+      X-Requested-With: XMLHttpRequest
+    params: {}
+    timeout_seconds: 40
+    retries: 2
+    retry_backoff_seconds: 0.8
+    verify_ssl: true
+
+  pagination:
+    mode: url_template
+    start_page: 1
+    end_page: 3
+    url_template: "{base_url}&page={page}"
+
+  cookie:
+    enabled: false
+
+  dedup:
+    redis_hash_key: zhaobiao:domian:linkqc
+    ttl_days: 30
+    prune_probability: 0.01
+
+  list_extraction:
+    response_html_selectors: []
+    item_selectors:
+      - kind: jsonpath
+        expr: $.data.data[*]
+    link_selectors:
+      - kind: jsonpath
+        expr: $.id
+    title_selectors:
+      - kind: jsonpath
+        expr: $.projectName
+    date_selectors:
+      - kind: jsonpath
+        expr: $.publishTime
+    detail_url_template: "https://proc-bidding.jd.com/bizApi/portal/bidPublish/detail/{value}"
+    min_title_length: 4
+    fallback_auto: false
+
+  detail_extraction:
+    response_html_selectors: []
+    # 详情 JSON 的正文集中在 projectDesc（项目介绍）；本条目下有些公告只写
+    # 「对应物资详见附件」，故按 projectDesc -> supplierAptitude（资质要求）-> remark（备注）
+    # 顺序做字段兜底（选择器引擎取第一个非空值）。
+    content_selectors:
+      - kind: jsonpath
+        expr: $.data.projectDesc
+      - kind: jsonpath
+        expr: $.data.supplierAptitude
+      - kind: jsonpath
+        expr: $.data.remark
+    title_selectors:
+      - kind: jsonpath
+        expr: $.data.projectName
+    date_selectors:
+      - kind: jsonpath
+        expr: $.data.publishTime
+    # 关掉启发式兜底：本接口是纯 JSON，兜底会 readability 整段 JSON 当成正文输出。
+    fallback_auto: false
+    fallback_readability: false
+    # 该平台部分公告正文本身极短（如「对应物资详见附件」8 字），阀值取 5 以保留这类记录
+    min_content_length: 5
+
+  attachments:
+    # 详情 JSON 的 fileList[] 给出 bucket/filePath/fileName；
+    # 下载直链 = https://storage.360buyimg.com/{bucket}/{filePath}
+    enabled: true
+    selectors:
+      - kind: jsonpath
+        expr: $.data.fileList[*].filePath
+    filename_selectors:
+      - kind: jsonpath
+        expr: $.data.fileList[*].fileName
+    url_template: "https://storage.360buyimg.com/jdbuy-info/{value}"
+    allowed_extensions: []
+    max_bytes: 52428800
+
+  classification:
+    # 本栏目固定为「采购信息/招募公告」，全部归为招标类
+    default_type: zhaobiao
+    zhongbiao_keywords: []
+
+  area_extraction:
+    enabled: true
+    use_title_first: true
+
+  output:
+    enabled: true
+    queue_zhaobiao: zhaobiao:result:zhaobiao
+    queue_zhongbiao: zhaobiao:result:zhongbiao
+    attachment_dir_zhaobiao: /root/pachong/zhaobiao/data/附件
+    attachment_dir_zhongbiao: /root/pachong/zhaobiao/data_zb/附件
