@@ -1,7 +1,8 @@
 import logging
 import os
+import re
 import uuid
-from urllib.parse import urlparse
+from urllib.parse import unquote_to_bytes, urlparse
 
 from spider.config.models import OutputConfig, RequestConfig
 from spider.fetch.http_client import FetchRequest, HttpFetcher
@@ -52,7 +53,6 @@ class AttachmentDownloader(object):
             name = ""
             if attachment_names and i < len(attachment_names):
                 name = attachment_names[i] or ""
-            filename = self._build_filename(url, name)
             fetch_req = FetchRequest(
                 url=url,
                 method="GET",
@@ -82,6 +82,10 @@ class AttachmentDownloader(object):
                 )
                 continue
 
+            # 文件名优先级：配置的 filename_selectors > 响应 Content-Disposition > URL 末段
+            response_name = self._filename_from_headers(response.headers)
+            filename = self._build_filename(url, name or response_name)
+
             file_path = root_path / filename
             with file_path.open("wb") as f:
                 f.write(response.content)
@@ -107,6 +111,87 @@ class AttachmentDownloader(object):
             total_urls=len(attachment_urls),
         )
         return output_files
+
+    @staticmethod
+    def _filename_from_headers(headers):
+        # type: (dict) -> str
+        """从响应头 Content-Disposition 解析真实文件名（源站附件常是 fileid 形式、无后缀）。"""
+        if not headers:
+            return ""
+        raw_header = ""
+        try:
+            for key, value in headers.items():
+                if str(key).lower() == "content-disposition":
+                    raw_header = value or ""
+                    break
+        except Exception:
+            return ""
+        if not raw_header:
+            return ""
+
+        # RFC 5987: filename*=UTF-8''%E4%B8%AD%E6%96%87.doc
+        match = re.search(r"filename\*\s*=\s*([^;]+)", raw_header, flags=re.I)
+        if match:
+            raw = match.group(1).strip().strip('"')
+            charset = "utf-8"
+            payload = raw
+            if "''" in raw:
+                charset, payload = raw.split("''", 1)
+            name = AttachmentDownloader._decode_percent_name(payload, charset)
+            if name:
+                return name
+
+        match = re.search(r'filename\s*=\s*"?([^";]+)"?', raw_header, flags=re.I)
+        if match:
+            candidate = match.group(1).strip()
+            # 不少源站把中文名做了 URL 编码（如 %E7%AB%9E%E4%BA%89...）
+            if "%" in candidate:
+                decoded = AttachmentDownloader._decode_percent_name(candidate, "utf-8")
+                if decoded:
+                    return decoded
+            return AttachmentDownloader._decode_header_text(candidate)
+        return ""
+
+    @staticmethod
+    def _decode_percent_name(payload, charset="utf-8"):
+        # type: (str, str) -> str
+        try:
+            data = unquote_to_bytes(payload)
+        except Exception:
+            data = (payload or "").encode("latin-1", "ignore")
+        if not data:
+            return ""
+        encodings = [charset, "utf-8", "gbk"]
+        for encoding in encodings:
+            if not encoding:
+                continue
+            try:
+                decoded = data.decode(encoding)
+                if decoded:
+                    return decoded
+            except Exception:
+                continue
+        return ""
+
+    @staticmethod
+    def _decode_header_text(value):
+        # type: (str) -> str
+        """响应头按 latin-1 解码时中文会变乱码，这里尝试按 utf-8/gbk 还原。"""
+        value = (value or "").strip()
+        if not value:
+            return ""
+        try:
+            raw = value.encode("latin-1", errors="strict")
+        except Exception:
+            return value
+        for encoding in ("utf-8", "gbk"):
+            try:
+                decoded = raw.decode(encoding)
+                if decoded:
+                    return decoded
+            except Exception:
+                continue
+        return value
 
     @staticmethod
     def _build_filename(url, name=""):

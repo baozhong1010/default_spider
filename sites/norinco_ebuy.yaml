@@ -19,12 +19,17 @@
 #   于是框架下载到的是 viewer 的 HTML，pdfminer 报 "No /Root object! - Is this really a PDF?"，
 #   整条记录会以「PDF 正文解析失败」丢弃。→ 因此本配置不依赖框架 PDF 转正文：
 #   · 正文 content_selectors 抓 //div[contains(@class,"zbztb_container")]（公告标题/货物分类/
-#     招标方/官方认证/发布时间+浏览次数/公告时间轴，约 300~500 字，稳定 > min_content_length）；
-#   · 公告原件 PDF 由 attachments 落盘（xpath 抓同一 iframe src，命中 viewer URL）；
+#     招标方/官方认证/发布时间+浏览次数/公告时间轴，实测 190~691 字，稳定 > min_content_length）；
+#   · 公告原件 PDF 由 attachments 落盘：xpath 用 substring-after(iframe/@src, "file=") 取到
+#     bidfile 直链，落盘即真正的 %PDF 文件（实测 51~110KB，pdfminer 可提取全文）；
 #   · 原文链接仍为官方详情页，附件里可下载 PDF 原件。
-#   备注：PDF 直链本身（bidfile.norincogroup-ebuy.com/bdfileservice/.../*.pdf，Content-Type: application/pdf）
-#   用 pdfminer 可正常提取正文（实测 6 类公告 280~3200 字、无 cid 乱码）；若日后框架支持从 viewer 的
-#   ?file= 参数二次解析，可改回「PDF 转正文」以获得完整公告全文。
+#   备注：PDF 直链（bidfile.norincogroup-ebuy.com/bdfileservice/.../*.pdf，Content-Type: application/pdf）
+#   用 pdfminer 可提取完整公告正文（实测 6 类公告 280~3200 字、无 cid 乱码）。但框架的 PDF 转正文
+#   分支固定用「viewer URL」，本站拿不到 PDF 字节，所以正文仍是详情页元信息、全文以 PDF 附件形式提供。
+#
+# 【地区】不配 list_extraction.area_selectors：站点 span.date 形如「发布日期:2026-09-11<iconfont>北京市」，
+#   条目级选择器只能整段取值（框架不归一化就直接写入 payload），而 regex 选择器在整页文本上跑会让每条
+#   都取到第一行的地区；因此交给 area_extraction.detect_area（标题优先→正文兜底→省级归并）。
 
 - id: norinco_ebuy_zbgg
   enabled: true
@@ -55,7 +60,7 @@
   pagination:
     mode: url_template
     start_page: 1
-    end_page: 1
+    end_page: 3
     url_template: "{base_url}/retrieve.do?typflag=1&es=1&page={page}"
 
   cookie:
@@ -82,21 +87,21 @@
         expr: .//span[@class="date"]/text()
       - kind: regex
         expr: '发布日期[:：]\s*(\d{4}-\d{2}-\d{2})'
-    # 地区：span.date 内 iconfont 之后的地区文本（如「北京市」），交给 detect_area 归并到省级
-    area_selectors:
-      - kind: regex
-        expr: '<i class="iconfont">&#xe61e;</i>([^<]{2,10})<'
-      - kind: xpath
-        expr: .//span[@class="date"]
+    # 地区：不配 area_selectors。站点列表的 span.date 形如
+    #   发布日期:2026-09-11<iconfont PUA>北京市
+    # 条目级 area_selectors 只能整段取值，框架会把原始串直接当「地区」写进 payload（不做归一化），
+    # 而 regex 选择器是在整页文本上跑的（会让每条都拿到第一行的地区）。
+    # 因此这里交给 area_extraction 的 detect_area：标题优先→正文兜底，统一归并成省级（实测与列表页地区一致）。
+    area_selectors: []
     min_title_length: 6
     fallback_auto: false
 
   detail_extraction:
     response_html_selectors: []
-    # 公告 PDF 是「正文」，但站点用 ggviewer.jsp?file=xxx.pdf 包了一层 JS 查看器：
-    # 框架 PdfBodyDetector 会把该 viewer URL 当成 pdf_url 去下载（拿到的是 HTML），pdfminer 必然失败，
-    # 故不能依赖框架的 PDF 转正文分支。这里改为抓详情页 HTML 元信息作为正文（约 300~500 字），
-    # 公告原件 PDF 由 attachments 落盘，原文链接仍指向官方详情页。
+    # 公告原件是 PDF，但站点用 ggviewer.jsp?file=xxx.pdf 包了一层 JS 查看器：
+    # 框架 PdfBodyDetector 会把该 viewer URL 当成 pdf_url 去下载（实际拿到 HTML），pdfminer 必然失败，
+    # 故不能依赖框架的 PDF 转正文分支。这里改为抓详情页 HTML 元信息作为正文（实测 190~691 字），
+    # 真正的公告 PDF 由 attachments 落盘，原文链接仍指向官方详情页。
     content_selectors:
       - kind: xpath
         expr: //div[contains(@class, "zbztb_container")]
@@ -115,17 +120,19 @@
 
   attachments:
     enabled: true
+    # 详情页 iframe 的 src 形如
+    #   /pages/cfcaPdf/TrustSignPDF.js/web/ggviewer.jsp?file=https://bidfile.../*.pdf
+    # 服务端对 ggviewer.jsp 只会返回 viewer 的 HTML，所以必须直接取 ?file= 之后的 PDF 直链：
+    # xpath 的 substring-after 在框架里可用（str.format 的切片与 jinja 都不支持），
+    # 取到的是 https://bidfile.norincogroup-ebuy.com/bdfileservice/.../*.pdf 绝对地址。
     selectors:
-      # iframe 的 src 形如 /pages/cfcaPdf/TrustSignPDF.js/web/ggviewer.jsp?file=https://bidfile.../*.pdf
-      # 说明：框架 url_template 不支持「取 ?file= 之后的子串」，因此只能下载 viewer 地址本身
-      #（服务端返回的是 HTML 查看器页，不是 PDF 字节）；文件名由 filename_selectors 修正为真实 PDF 名。
       - kind: xpath
-        expr: //iframe[contains(@id, "pdfIframe")]/@src
-    # 附件名取 viewer 里 file= 的 PDF basename（否则落盘名会是 ggviewer.jsp）
+        expr: substring-after(//iframe[contains(@id, "pdfIframe")]/@src, "file=")
+    # 附件名取 PDF basename（否则落盘名会是 ggviewer.jsp）
     filename_selectors:
       - kind: regex
         expr: 'pdfIframe[^>]*?src="[^"]*?/([^/"]+\.pdf)"'
-    url_template: "https://bid.norincogroup-ebuy.com{value}"
+    url_template: "{value}"
     allowed_extensions: [".pdf", ".doc", ".docx", ".xls", ".xlsx", ".zip", ".rar"]
     max_bytes: 52428800
 
@@ -135,8 +142,8 @@
 
   area_extraction:
     enabled: true
-    # 列表页 span.date 已给出地区（item_area 优先）；标题次之，最后才看正文，
-    # 避免详情页公告时间轴里「招标方地址（如陕西省）」把地区带偏
+    # 地区不配 list_extraction.area_selectors，改由 detect_area 归一化：
+    # 标题优先 → 正文兜底 → 归并到省级（少部分标题/正文都无地区信息的记录留空）
     use_title_first: true
 
   output:
@@ -175,7 +182,7 @@
   pagination:
     mode: url_template
     start_page: 1
-    end_page: 1
+    end_page: 3
     url_template: "{base_url}/retrieve.do?typflag=2&es=1&page={page}"
 
   cookie:
@@ -202,12 +209,12 @@
         expr: .//span[@class="date"]/text()
       - kind: regex
         expr: '发布日期[:：]\s*(\d{4}-\d{2}-\d{2})'
-    # 地区：span.date 内 iconfont 之后的地区文本（如「北京市」），交给 detect_area 归并到省级
-    area_selectors:
-      - kind: regex
-        expr: '<i class="iconfont">&#xe61e;</i>([^<]{2,10})<'
-      - kind: xpath
-        expr: .//span[@class="date"]
+    # 地区：不配 area_selectors。站点列表的 span.date 形如
+    #   发布日期:2026-09-11<iconfont PUA>北京市
+    # 条目级 area_selectors 只能整段取值，框架会把原始串直接当「地区」写进 payload（不做归一化），
+    # 而 regex 选择器是在整页文本上跑的（会让每条都拿到第一行的地区）。
+    # 因此这里交给 area_extraction 的 detect_area：标题优先→正文兜底，统一归并成省级（实测与列表页地区一致）。
+    area_selectors: []
     min_title_length: 6
     fallback_auto: false
 
@@ -233,12 +240,12 @@
     enabled: true
     selectors:
       - kind: xpath
-        expr: //iframe[contains(@id, "pdfIframe")]/@src
+        expr: substring-after(//iframe[contains(@id, "pdfIframe")]/@src, "file=")
     # 附件名取 viewer 里 file= 的 PDF basename（否则落盘名会是 ggviewer.jsp）
     filename_selectors:
       - kind: regex
         expr: 'pdfIframe[^>]*?src="[^"]*?/([^/"]+\.pdf)"'
-    url_template: "https://bid.norincogroup-ebuy.com{value}"
+    url_template: "{value}"
     allowed_extensions: [".pdf", ".doc", ".docx", ".xls", ".xlsx", ".zip", ".rar"]
     max_bytes: 52428800
 
@@ -248,8 +255,8 @@
 
   area_extraction:
     enabled: true
-    # 列表页 span.date 已给出地区（item_area 优先）；标题次之，最后才看正文，
-    # 避免详情页公告时间轴里「招标方地址（如陕西省）」把地区带偏
+    # 地区不配 list_extraction.area_selectors，改由 detect_area 归一化：
+    # 标题优先 → 正文兜底 → 归并到省级（少部分标题/正文都无地区信息的记录留空）
     use_title_first: true
 
   output:
@@ -288,7 +295,7 @@
   pagination:
     mode: url_template
     start_page: 1
-    end_page: 1
+    end_page: 3
     url_template: "{base_url}/retrieve.do?typflag=3&es=1&page={page}"
 
   cookie:
@@ -315,12 +322,12 @@
         expr: .//span[@class="date"]/text()
       - kind: regex
         expr: '发布日期[:：]\s*(\d{4}-\d{2}-\d{2})'
-    # 地区：span.date 内 iconfont 之后的地区文本（如「北京市」），交给 detect_area 归并到省级
-    area_selectors:
-      - kind: regex
-        expr: '<i class="iconfont">&#xe61e;</i>([^<]{2,10})<'
-      - kind: xpath
-        expr: .//span[@class="date"]
+    # 地区：不配 area_selectors。站点列表的 span.date 形如
+    #   发布日期:2026-09-11<iconfont PUA>北京市
+    # 条目级 area_selectors 只能整段取值，框架会把原始串直接当「地区」写进 payload（不做归一化），
+    # 而 regex 选择器是在整页文本上跑的（会让每条都拿到第一行的地区）。
+    # 因此这里交给 area_extraction 的 detect_area：标题优先→正文兜底，统一归并成省级（实测与列表页地区一致）。
+    area_selectors: []
     min_title_length: 6
     fallback_auto: false
 
@@ -346,12 +353,12 @@
     enabled: true
     selectors:
       - kind: xpath
-        expr: //iframe[contains(@id, "pdfIframe")]/@src
+        expr: substring-after(//iframe[contains(@id, "pdfIframe")]/@src, "file=")
     # 附件名取 viewer 里 file= 的 PDF basename（否则落盘名会是 ggviewer.jsp）
     filename_selectors:
       - kind: regex
         expr: 'pdfIframe[^>]*?src="[^"]*?/([^/"]+\.pdf)"'
-    url_template: "https://bid.norincogroup-ebuy.com{value}"
+    url_template: "{value}"
     allowed_extensions: [".pdf", ".doc", ".docx", ".xls", ".xlsx", ".zip", ".rar"]
     max_bytes: 52428800
 
@@ -361,8 +368,8 @@
 
   area_extraction:
     enabled: true
-    # 列表页 span.date 已给出地区（item_area 优先）；标题次之，最后才看正文，
-    # 避免详情页公告时间轴里「招标方地址（如陕西省）」把地区带偏
+    # 地区不配 list_extraction.area_selectors，改由 detect_area 归一化：
+    # 标题优先 → 正文兜底 → 归并到省级（少部分标题/正文都无地区信息的记录留空）
     use_title_first: true
 
   output:
@@ -401,7 +408,7 @@
   pagination:
     mode: url_template
     start_page: 1
-    end_page: 1
+    end_page: 3
     url_template: "{base_url}/retrieve.do?typflag=4&es=1&page={page}"
 
   cookie:
@@ -428,12 +435,12 @@
         expr: .//span[@class="date"]/text()
       - kind: regex
         expr: '发布日期[:：]\s*(\d{4}-\d{2}-\d{2})'
-    # 地区：span.date 内 iconfont 之后的地区文本（如「北京市」），交给 detect_area 归并到省级
-    area_selectors:
-      - kind: regex
-        expr: '<i class="iconfont">&#xe61e;</i>([^<]{2,10})<'
-      - kind: xpath
-        expr: .//span[@class="date"]
+    # 地区：不配 area_selectors。站点列表的 span.date 形如
+    #   发布日期:2026-09-11<iconfont PUA>北京市
+    # 条目级 area_selectors 只能整段取值，框架会把原始串直接当「地区」写进 payload（不做归一化），
+    # 而 regex 选择器是在整页文本上跑的（会让每条都拿到第一行的地区）。
+    # 因此这里交给 area_extraction 的 detect_area：标题优先→正文兜底，统一归并成省级（实测与列表页地区一致）。
+    area_selectors: []
     min_title_length: 6
     fallback_auto: false
 
@@ -459,12 +466,12 @@
     enabled: true
     selectors:
       - kind: xpath
-        expr: //iframe[contains(@id, "pdfIframe")]/@src
+        expr: substring-after(//iframe[contains(@id, "pdfIframe")]/@src, "file=")
     # 附件名取 viewer 里 file= 的 PDF basename（否则落盘名会是 ggviewer.jsp）
     filename_selectors:
       - kind: regex
         expr: 'pdfIframe[^>]*?src="[^"]*?/([^/"]+\.pdf)"'
-    url_template: "https://bid.norincogroup-ebuy.com{value}"
+    url_template: "{value}"
     allowed_extensions: [".pdf", ".doc", ".docx", ".xls", ".xlsx", ".zip", ".rar"]
     max_bytes: 52428800
 
@@ -475,8 +482,8 @@
 
   area_extraction:
     enabled: true
-    # 列表页 span.date 已给出地区（item_area 优先）；标题次之，最后才看正文，
-    # 避免详情页公告时间轴里「招标方地址（如陕西省）」把地区带偏
+    # 地区不配 list_extraction.area_selectors，改由 detect_area 归一化：
+    # 标题优先 → 正文兜底 → 归并到省级（少部分标题/正文都无地区信息的记录留空）
     use_title_first: true
 
   output:
@@ -515,7 +522,7 @@
   pagination:
     mode: url_template
     start_page: 1
-    end_page: 1
+    end_page: 3
     url_template: "{base_url}/retrieve.do?typflag=5&es=1&page={page}"
 
   cookie:
@@ -542,12 +549,12 @@
         expr: .//span[@class="date"]/text()
       - kind: regex
         expr: '发布日期[:：]\s*(\d{4}-\d{2}-\d{2})'
-    # 地区：span.date 内 iconfont 之后的地区文本（如「北京市」），交给 detect_area 归并到省级
-    area_selectors:
-      - kind: regex
-        expr: '<i class="iconfont">&#xe61e;</i>([^<]{2,10})<'
-      - kind: xpath
-        expr: .//span[@class="date"]
+    # 地区：不配 area_selectors。站点列表的 span.date 形如
+    #   发布日期:2026-09-11<iconfont PUA>北京市
+    # 条目级 area_selectors 只能整段取值，框架会把原始串直接当「地区」写进 payload（不做归一化），
+    # 而 regex 选择器是在整页文本上跑的（会让每条都拿到第一行的地区）。
+    # 因此这里交给 area_extraction 的 detect_area：标题优先→正文兜底，统一归并成省级（实测与列表页地区一致）。
+    area_selectors: []
     min_title_length: 6
     fallback_auto: false
 
@@ -573,12 +580,12 @@
     enabled: true
     selectors:
       - kind: xpath
-        expr: //iframe[contains(@id, "pdfIframe")]/@src
+        expr: substring-after(//iframe[contains(@id, "pdfIframe")]/@src, "file=")
     # 附件名取 viewer 里 file= 的 PDF basename（否则落盘名会是 ggviewer.jsp）
     filename_selectors:
       - kind: regex
         expr: 'pdfIframe[^>]*?src="[^"]*?/([^/"]+\.pdf)"'
-    url_template: "https://bid.norincogroup-ebuy.com{value}"
+    url_template: "{value}"
     allowed_extensions: [".pdf", ".doc", ".docx", ".xls", ".xlsx", ".zip", ".rar"]
     max_bytes: 52428800
 
@@ -589,8 +596,8 @@
 
   area_extraction:
     enabled: true
-    # 列表页 span.date 已给出地区（item_area 优先）；标题次之，最后才看正文，
-    # 避免详情页公告时间轴里「招标方地址（如陕西省）」把地区带偏
+    # 地区不配 list_extraction.area_selectors，改由 detect_area 归一化：
+    # 标题优先 → 正文兜底 → 归并到省级（少部分标题/正文都无地区信息的记录留空）
     use_title_first: true
 
   output:
@@ -629,7 +636,7 @@
   pagination:
     mode: url_template
     start_page: 1
-    end_page: 1
+    end_page: 3
     url_template: "{base_url}/retrieve.do?typflag=6&es=1&page={page}"
 
   cookie:
@@ -656,12 +663,12 @@
         expr: .//span[@class="date"]/text()
       - kind: regex
         expr: '发布日期[:：]\s*(\d{4}-\d{2}-\d{2})'
-    # 地区：span.date 内 iconfont 之后的地区文本（如「北京市」），交给 detect_area 归并到省级
-    area_selectors:
-      - kind: regex
-        expr: '<i class="iconfont">&#xe61e;</i>([^<]{2,10})<'
-      - kind: xpath
-        expr: .//span[@class="date"]
+    # 地区：不配 area_selectors。站点列表的 span.date 形如
+    #   发布日期:2026-09-11<iconfont PUA>北京市
+    # 条目级 area_selectors 只能整段取值，框架会把原始串直接当「地区」写进 payload（不做归一化），
+    # 而 regex 选择器是在整页文本上跑的（会让每条都拿到第一行的地区）。
+    # 因此这里交给 area_extraction 的 detect_area：标题优先→正文兜底，统一归并成省级（实测与列表页地区一致）。
+    area_selectors: []
     min_title_length: 6
     fallback_auto: false
 
@@ -687,12 +694,12 @@
     enabled: true
     selectors:
       - kind: xpath
-        expr: //iframe[contains(@id, "pdfIframe")]/@src
+        expr: substring-after(//iframe[contains(@id, "pdfIframe")]/@src, "file=")
     # 附件名取 viewer 里 file= 的 PDF basename（否则落盘名会是 ggviewer.jsp）
     filename_selectors:
       - kind: regex
         expr: 'pdfIframe[^>]*?src="[^"]*?/([^/"]+\.pdf)"'
-    url_template: "https://bid.norincogroup-ebuy.com{value}"
+    url_template: "{value}"
     allowed_extensions: [".pdf", ".doc", ".docx", ".xls", ".xlsx", ".zip", ".rar"]
     max_bytes: 52428800
 
@@ -703,8 +710,8 @@
 
   area_extraction:
     enabled: true
-    # 列表页 span.date 已给出地区（item_area 优先）；标题次之，最后才看正文，
-    # 避免详情页公告时间轴里「招标方地址（如陕西省）」把地区带偏
+    # 地区不配 list_extraction.area_selectors，改由 detect_area 归一化：
+    # 标题优先 → 正文兜底 → 归并到省级（少部分标题/正文都无地区信息的记录留空）
     use_title_first: true
 
   output:
