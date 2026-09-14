@@ -186,6 +186,9 @@ class AttachmentConfig(BaseModel):
     # 附件 URL 模板，{value} 为选择器取到的原始值。
     # 用于「固定前缀 + 字段值」拼接（如 OSS 直链、协议相对 //host/path 补 https:）。
     url_template: Optional[str] = None
+    # 拒绝把「登录页/错误页」当成附件落盘：附件接口对匿名请求常返回 200 + 登录页 HTML，
+    # 若不校验会把它存成附件文件（日志还显示"下载成功"）。默认开启。
+    reject_login_pages: bool = True
     allowed_extensions: List[str] = Field(
         default_factory=lambda: [".pdf", ".doc", ".docx", ".xls", ".xlsx", ".zip", ".rar", ".txt"]
     )

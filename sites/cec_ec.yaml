@@ -1,0 +1,820 @@
+﻿# CEC电子采购平台（www.cec-ec.com.cn）—— 中国电子信息产业集团（CEC）电子采购/招标门户
+#
+# ============================ 一、站点识别与可达性 ============================
+# 站点性质：PowerEC CMS（meta author="POWEREC"），服务端渲染静态 HTML + jQuery，
+#   无 JS 反爬、无加密接口、无需登录即可看到列表与正文。
+#
+# 可达性（重要）：
+#   - 直连 http:// 与 https:// 用 curl/Chrome 都不通（000/502），但**框架同款路径
+#     （Python urllib + 系统代理 127.0.0.1:7890）完全可达**，实测全部 200。
+#   - http://www.cec-ec.com.cn/ 仅 182 字节跳转壳 → /cms/index.htm；真实入口
+#     https://www.cec-ec.com.cn/cms/index.htm（75KB）。
+#   - TLS：证书可正常校验（Python 3.6 + 系统 CA 链验证通过），故 verify_ssl: true。
+#   - 响应 Content-Type: text/html;charset=UTF-8，无编码问题。
+#   - 无需 Cookie / 无需 Referer 即可 200；仍显式带上 Referer 与浏览器 Accept，
+#     与其它站点配置保持一致（实测带与不带均 200）。
+#
+# ============================ 二、栏目结构 ============================
+# 一级导航「采购信息」下有 2 个二级栏目，每个二级栏目再分 3 个 tab 子栏目；
+# 另有合并的「全部」视图（1xmgg0 / 2xmgg0）。合并视图的页数与三个子栏目之和相等
+#   （1xmgg0 = 594 页 = 302 + 34 + 258），说明子栏目是合并视图的互斥切分，无重叠。
+#
+#   /cms/channel/1xmgg0/index.htm  招标采购信息-全部          594 页  （不配置，避免与下面重复）
+#   /cms/channel/1xmgg1/index.htm  招标采购信息-招标公告      302 页  → zhaobiao（混有结果类）
+#   /cms/channel/1xmgg2/index.htm  招标采购信息-变更公告       34 页  → zhaobiao（混有结果类）
+#   /cms/channel/1xmgg3/index.htm  招标采购信息-中标公示      258 页  → zhongbiao（纯结果）
+#   /cms/channel/2xmgg0/index.htm  非招标采购信息-全部       6944 页  （不配置）
+#   /cms/channel/2xmgg1/index.htm  非招标采购信息-采购公告   3255 页  → zhaobiao（纯招标/采购）
+#   /cms/channel/2xmgg2/index.htm  非招标采购信息-变更公告   1869 页  → zhaobiao（混有结果类）
+#   /cms/channel/2xmgg3/index.htm  非招标采购信息-采购结果公示 1821 页 → zhongbiao（纯结果）
+#
+# 未采用的栏目：zxzx1/zxzx2（资讯中心，非招标）、help1/help4（帮助中心/通知公告）、
+#   lxwm（联系我们）。这些是站方内部资讯，不属于招标/中标公告。
+#
+# ============================ 三、分页 ============================
+# 分页由 js/page.js 的 page(v) 实现：无 query 串时跳 "?pageNo=N"，已有则追加/替换
+#   pageNo。实测 index.htm?pageNo=2 / pageNo=3 均 200，且「当前<em>2</em>页」正确，
+#   每条日期与第 1 页不同 → 分页真实生效。故用最简单的 page_param + pageNo。
+#
+# ============================ 四、列表结构 ============================
+#   <div class="infolist-main bidlist ...">
+#     <ul id="list1">
+#       <li name="li_name">
+#         <a id="0" href="/cms/channel/1xmgg1/72275.htm" title="完整标题">
+#           <span><i class="iconfont"></i>完整标题</span>
+#           <em>2026-08-26</em>              ← 列表日期（YYYY-MM-DD）
+#           <span class="style"><input type="hidden" buystart_1=... buyend_1=...></span>
+#         </a>
+#       </li>
+#       ...
+# 取 a 节点作 item：link=.//a/@href，title=.//a/@title，date=.//em//text()。
+# 注意：日期 <em> 在 <a> 内部，item 必须取 <a> 而不是 <li>，否则 date 取不到。
+# 个别条目 title 为空（如 /cms/channel/1xmgg2/51129.htm、1xmgg3/66113.htm，正文只有一个
+#   "/"），已由 min_title_length: 8 过滤掉（实测 3 页 30 条中各有 1 条被过滤）。
+#
+# ============================ 五、详情结构 ============================
+#   <div class="article-content">
+#     <div class="article-title">完整标题</div>
+#     <div class="article-author"><em>发布时间： 2026-08-26 10:52:24</em></div>
+#     <div class="main-text">…公告正文（<p> 段落）…</div>
+#     <div class="text">附件1:<br><ul><a href=/ebidding/DownloadServlet?id=<uuid>>文件名</a></ul></div>
+#     <div class="article-bottom">上一篇/下一篇</div>
+#   </div>
+# 正文容器用 //div[@class="main-text"]；标题用 //div[@class="article-title"]；
+# 发布时间用 regex 从原始响应取（"发布时间： 2026-08-26 10:52:24"）。
+#
+# 正文长度的实际情况（实测 12 个详情页，**全部 200、无需登录**）：
+#   1xmgg1/72275  公开招标公告      约 8.6 KB 正文
+#   1xmgg2/67325  变更公告          3538 字
+#   1xmgg3/71603  中标候选人公示     776 字
+#   2xmgg3/77281  成交结果公示      122 字
+#   1xmgg1/63748  废标公告          201 字
+#   1xmgg1/73691  招标失败公告      238 字
+#   2xmgg2/77304  采购公告变更      56 字
+#   2xmgg1/77331  事前公示          5 字（正文就是「按要求公示」）
+#   2xmgg2/77329  变更公告          4 字（正文就是「变更时间」）
+# 各栏目第 1 页 10 条 main-text 正文字数分布（实测，去空白后字符数）：
+#     1xmgg1: 全部 >=118 字                       → 10/10 可产出
+#     1xmgg2: 仅 1 条 1 字（标题/正文都是 "/"，已被 min_title_length 过滤）→ 9/10
+#     1xmgg3: 全部 >=102 字                       → 10/10
+#     2xmgg1: 7 条 191~1342 字，3 条 5~6 字（"按要求公示"）→ 7/10
+#     2xmgg2: 3 条 52~388 字，7 条 1~24 字          → 3/10
+#     2xmgg3: 7 条 91~102 字，3 条 7~26 字          → 7/10
+# 即：非招标采购信息（2xmgg*，多为中电二/三/四建等下属企业的电子竞价）**正文普遍极短**，
+# 站方本身就只贴一句话 + 附件。这类公告会被框架判为 content_too_short 而失败，
+# 属**源站正文过短**，不是抓取失败；不为了凑数把 min_content_length 降到无意义阈值。
+#
+# ============================ 六、附件（阻断项） ============================
+# 附件链接形如  <a href=/ebidding/DownloadServlet?id=<uuid>>宜兴远东项目冷水机组采购文件.rar</a>
+# 实测（3 个不同 id + 带/不带 CMS 的 JSESSIONID 与 Referer 共 5 次）：该接口**未登录时
+#   一律返回登录页**——HTTP 200、14444 字节、Content-Type: text/html;charset=utf-8、
+#   无 Content-Disposition、正文含 <form id="form" method="post" action="login"> 与用户名/密码框。
+#   → 属**账号登录墙**（供应商/CA 账号），匿名不可取。
+#
+# ⚠ 由此产生的框架行为（务必知道，否则会误判成"附件下载成功"）：
+#   第 3 轮 run-site 日志里 7 个附件 URL 全部"落盘成功"，但落盘的 7 个文件字节数都是
+#   **14444**、首字节是 0d 0a 0d 0a…（不是 PK/504b 的 zip/rar/xlsx 头），内容就是那个登录页 ——
+#   即 AttachmentDownloader 只校验 status==200 与非空、不校验 Content-Type/魔数，
+#   于是把登录页 HTML 当成附件存了下来（文件名取自链接文本，如「公告附件-招标采购.zip」）。
+#   本配置不规避这一点（规避需要改框架代码，本次不允许改框架），
+#   **部署侧必须以 Content-Type/魔数或文件大小复核附件有效性，或直接认为本站附件不可用**。
+#   我在测试后已删除自己产生的这些 14444 字节假附件。
+#
+# 若后续拿到可用 Cookie：打开 cookie.enabled 并从 Redis 注入，选择器无需改。
+# 另：站内还开放 /sys/download/<uuid>.htm（**无需登录**，实测 200 + application/octet-stream +
+#   Content-Disposition: attachment;filename=图片1.png），但该接口只出现在资讯中心正文的插图里，
+#   招标公告的附件不走它。
+#
+# ============================ 七、分类策略 ============================
+# 站方把「结果类」公告也塞进了招标/变更栏目（1xmgg1 里混有 中标公告/失败公告/废标公告/
+#   中标候选人公示；1xmgg2 里混有 中标结果公示/评标结果公示/资审结果公示），所以
+#   1xmgg1/1xmgg2/2xmgg1/2xmgg2 都不能用 default_type=zhaobiao + zhongbiao_keywords: []，
+#   否则这些结果公告会被误标成招标。
+# 1xmgg3（中标公示）/ 2xmgg3（采购结果公示）实测三页 60 条全是结果类，属固定分类 →
+#   default_type: zhongbiao + zhongbiao_keywords: []。
+# zhongbiao_keywords 只用「结果类专用短语」，且**排除「终止」**（用户规则明确终止公告属招标类）。
+#
+# 关键词取舍依据（用 6 个栏目各 3 页共 180 条真实公告建了参考语料：先按标题里的结果类短语
+#   打参考标签，再逐条人工复核修正 6 条错标；然后对每个候选词测量它作为
+#   「title+正文 合并子串」命中时的 precision / recall，与框架 classify_bid_type 完全同构）：
+#   最终词表 S3 = 中标结果 / 中标公示 / 中标公告 / 候选人公示 / 评标结果 / 定标 / 中选 /
+#                  成交结果 / 成交公示 / 成交公告 / 废标 / 流标 / 失败公告 / 结果公示 / 结果公告
+#   实测：TP=73 FP=2 FN=4 → precision 0.973，recall 0.948。
+#
+#   被排除的词与原因（每条都有语料证据）：
+#   - 「中标」（裸词）：precision 0.775。招标公告正文普遍写「自中标通知书发布之日起…」
+#     （如 1xmgg1/72275、72335、67242），16/71 命中落在招标公告上 → 严重误判。
+#   - 「中标候选人」：precision 0.903。招标公告资格条款写「直至取消其中标候选人中标资格」
+#     （1xmgg1 中电凯杰项目），改用「候选人公示」即可保留 recall 且 0 误判。
+#   - 「成交」「结果」（裸词）：precision 0.641 / 0.649。采购公告正文普遍写
+#     「1.6成交供应商数量及成交份额」「以招标人查询结果为准」→ 必须用带后缀的长词。
+#   - 「终止」/「终止公告」：precision 0.5，且用户规则明确 终止公告 → zhaobiao。
+#   - 「失败」：必须写成「失败公告」（「采购失败」「投标失败」等表述会出现在招标正文）。
+#
+#   已知残留误差（框架限制，无法在选择器层解决，如实记录）：
+#   - 框架是把 标题+正文 合并后做子串匹配，无法只按标题判定，因此正文里偶然提到
+#     「成交公告」「失败公告」的招标公告仍会被判成 zhongbiao（语料中 2/180，约 1.1%）；
+#     典型：2xmgg1/77301（竞价采购公告正文写「发布竞价采购公告和成交公告的媒介：…」）、
+#     1xmgg1/62966（标题是项目名，正文实为「公开招标项目失败公告」，属站方标题填写不全）。
+#   - 「终止公告 / 废标公告」按用户规则归 zhaobiao，故不是误差，而是规则要求。
+#
+# ============================ 八、配置清单（含第 3 轮实测条数，各 1 页） ============================
+#   cec_zbgg    招标采购信息-招标公告       10/10 条成功   zhaobiao 6 / zhongbiao 4
+#   cec_zbbgg   招标采购信息-变更公告        9/10 条成功   zhaobiao 8 / zhongbiao 1
+#   cec_zbgs    招标采购信息-中标公示       10/10 条成功   zhongbiao 10（固定）
+#   cec_cggg    非招标采购信息-采购公告      7/10 条成功   zhaobiao 7（固定）
+#   cec_cgbgg   非招标采购信息-变更公告      2/10 条成功   zhaobiao 2（固定）
+#   cec_cgjggs  非招标采购信息-采购结果公示  7/10 条成功   zhongbiao 7（固定）
+#   合计 45/60 条成功，zhaobiao 23 / zhongbiao 22；15 条未产出全部是正文 <30 字的
+#   content_too_short（站方正文过短），不是抓取/解析失败。
+#   附件：7 次尝试全部落盘 **假文件**（登录页，见第六节）→ 有效附件 0 个。
+#   详见 search_website/cec_notes.md。
+
+- id: cec_zbgg
+  enabled: true
+  name: CEC电子采购平台-招标采购信息-招标公告
+  entry_urls:
+    - https://www.cec-ec.com.cn/cms/channel/1xmgg1/index.htm
+    - https://www.cec-ec.com.cn/cms/channel/1xmgg1/index.htm
+    - https://www.cec-ec.com.cn/cms/channel/1xmgg1/index.htm
+
+  schedule:
+    enabled: true
+    interval_seconds: 3600
+
+  limits:
+    max_concurrency: 3
+    request_interval_seconds: 0.5
+
+  request:
+    method: GET
+    headers:
+      Referer: https://www.cec-ec.com.cn/cms/channel/1xmgg1/index.htm
+      Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8
+      Accept-Language: zh-CN,zh;q=0.9,en;q=0.8
+    params: {}
+    timeout_seconds: 40
+    retries: 2
+    retry_backoff_seconds: 0.8
+    verify_ssl: true
+
+  pagination:
+    # page.js 的 page(v) 最终跳转 ?pageNo=N，实测 index.htm?pageNo=2/3 均 200
+    mode: page_param
+    page_param: pageNo
+    start_page: 1
+    end_page: 3
+
+  crypto:
+    enabled: false
+
+  cookie:
+    enabled: false
+
+  dedup:
+    redis_hash_key: zhaobiao:domian:linkqc
+    ttl_days: 30
+    prune_probability: 0.01
+
+  list_extraction:
+    response_html_selectors: []
+    item_selectors:
+      - kind: xpath
+        expr: //div[contains(@class, "bidlist")]//ul[@id="list1"]/li//a
+    link_selectors:
+      - kind: xpath
+        expr: ./@href
+    title_selectors:
+      # 列表 <a title="完整标题">，列表标题未截断，无需详情回填
+      - kind: xpath
+        expr: ./@title
+    date_selectors:
+      # 日期 <em>2026-08-26</em> 位于 <a> 内部，故 item 取 <a>
+      - kind: xpath
+        expr: .//em//text()
+    min_title_length: 8
+    fallback_auto: false
+
+  detail_extraction:
+    response_html_selectors: []
+    content_selectors:
+      - kind: xpath
+        expr: //div[@class="main-text"]
+    # 列表标题已完整，详情标题仅作二次覆盖（与列表一致）
+    title_selectors:
+      - kind: xpath
+        expr: //div[@class="article-title"]//text()
+    # 「发布时间： 2026-08-26 10:52:24」
+    date_selectors:
+      - kind: regex
+        expr: "发布时间：\\s*(\\d{4}-\\d{1,2}-\\d{1,2}(?:\\s+\\d{1,2}:\\d{1,2}:\\d{1,2})?)"
+    fallback_auto: false
+    fallback_readability: false
+    min_content_length: 30
+
+  attachments:
+    enabled: true
+    # 附件 URL 形如 /ebidding/DownloadServlet?id=<uuid>，**无文件后缀**，故 allowed_extensions 留空
+    selectors:
+      - kind: xpath
+        expr: //div[@class="text"]//a/@href
+    # filename_selectors 与 selectors 按位置对齐：这里同样只取正文附件区的 a 文本，
+    # 与上面 URL 列表一一对应（正文正文区外还有导航/页脚 a，故不能用文档级 //a//text()）
+    filename_selectors:
+      - kind: xpath
+        expr: //div[@class="text"]//a//text()
+    allowed_extensions: []
+    max_bytes: 52428800
+
+  classification:
+    # 该栏目混有结果类公告（中标公告 / 评标结果公示 / 中标候选人公示 / 招标失败公告），
+    # 故不能固定 zhaobiao；用实测词表分流（语料 180 条实测 precision 0.973 / recall 0.948，
+    # 词表取舍与被排除词的原因见文件头「七、分类策略」）
+    default_type: zhaobiao
+    zhongbiao_keywords:
+      - 中标结果
+      - 中标公示
+      - 中标公告
+      - 候选人公示
+      - 评标结果
+      - 定标
+      - 中选
+      - 成交结果
+      - 成交公示
+      - 成交公告
+      - 废标
+      - 流标
+      - 失败公告
+      - 结果公示
+      - 结果公告
+
+  area_extraction:
+    # 无地区字段，由标题/正文启发式提取（如「数字珠海建设运营有限公司」「广东省」）
+    enabled: true
+    use_title_first: true
+
+  output:
+    enabled: true
+    queue_zhaobiao: zhaobiao:result:zhaobiao
+    queue_zhongbiao: zhaobiao:result:zhongbiao
+    attachment_dir_zhaobiao: /root/pachong/zhaobiao/data/附件
+    attachment_dir_zhongbiao: /root/pachong/zhaobiao/data_zb/附件
+
+- id: cec_zbbgg
+  enabled: true
+  name: CEC电子采购平台-招标采购信息-变更公告
+  entry_urls:
+    - https://www.cec-ec.com.cn/cms/channel/1xmgg2/index.htm
+    - https://www.cec-ec.com.cn/cms/channel/1xmgg2/index.htm
+    - https://www.cec-ec.com.cn/cms/channel/1xmgg2/index.htm
+
+  schedule:
+    enabled: true
+    interval_seconds: 3600
+
+  limits:
+    max_concurrency: 3
+    request_interval_seconds: 0.5
+
+  request:
+    method: GET
+    headers:
+      Referer: https://www.cec-ec.com.cn/cms/channel/1xmgg2/index.htm
+      Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8
+      Accept-Language: zh-CN,zh;q=0.9,en;q=0.8
+    params: {}
+    timeout_seconds: 40
+    retries: 2
+    retry_backoff_seconds: 0.8
+    verify_ssl: true
+
+  pagination:
+    mode: page_param
+    page_param: pageNo
+    start_page: 1
+    end_page: 3
+
+  crypto:
+    enabled: false
+
+  cookie:
+    enabled: false
+
+  dedup:
+    redis_hash_key: zhaobiao:domian:linkqc
+    ttl_days: 30
+    prune_probability: 0.01
+
+  list_extraction:
+    response_html_selectors: []
+    item_selectors:
+      - kind: xpath
+        expr: //div[contains(@class, "bidlist")]//ul[@id="list1"]/li//a
+    link_selectors:
+      - kind: xpath
+        expr: ./@href
+    title_selectors:
+      - kind: xpath
+        expr: ./@title
+    date_selectors:
+      - kind: xpath
+        expr: .//em//text()
+    min_title_length: 8
+    fallback_auto: false
+
+  detail_extraction:
+    response_html_selectors: []
+    content_selectors:
+      - kind: xpath
+        expr: //div[@class="main-text"]
+    title_selectors:
+      - kind: xpath
+        expr: //div[@class="article-title"]//text()
+    date_selectors:
+      - kind: regex
+        expr: "发布时间：\\s*(\\d{4}-\\d{1,2}-\\d{1,2}(?:\\s+\\d{1,2}:\\d{1,2}:\\d{1,2})?)"
+    fallback_auto: false
+    fallback_readability: false
+    min_content_length: 30
+
+  attachments:
+    enabled: true
+    selectors:
+      - kind: xpath
+        expr: //div[@class="text"]//a/@href
+    filename_selectors:
+      - kind: xpath
+        expr: //div[@class="text"]//a//text()
+    allowed_extensions: []
+    max_bytes: 52428800
+
+  classification:
+    # 该栏目混有结果类公告（中标结果公示 / 评标结果公示 / 资审结果公示，甚至有「变更公告」
+    # 正文实为评审结果、列出第一/第二中标候选人的情形）→ 同样用实测词表分流
+    default_type: zhaobiao
+    zhongbiao_keywords:
+      - 中标结果
+      - 中标公示
+      - 中标公告
+      - 候选人公示
+      - 评标结果
+      - 定标
+      - 中选
+      - 成交结果
+      - 成交公示
+      - 成交公告
+      - 废标
+      - 流标
+      - 失败公告
+      - 结果公示
+      - 结果公告
+
+  area_extraction:
+    enabled: true
+    use_title_first: true
+
+  output:
+    enabled: true
+    queue_zhaobiao: zhaobiao:result:zhaobiao
+    queue_zhongbiao: zhaobiao:result:zhongbiao
+    attachment_dir_zhaobiao: /root/pachong/zhaobiao/data/附件
+    attachment_dir_zhongbiao: /root/pachong/zhaobiao/data_zb/附件
+
+- id: cec_zbgs
+  enabled: true
+  name: CEC电子采购平台-招标采购信息-中标公示
+  entry_urls:
+    - https://www.cec-ec.com.cn/cms/channel/1xmgg3/index.htm
+    - https://www.cec-ec.com.cn/cms/channel/1xmgg3/index.htm
+    - https://www.cec-ec.com.cn/cms/channel/1xmgg3/index.htm
+
+  schedule:
+    enabled: true
+    interval_seconds: 3600
+
+  limits:
+    max_concurrency: 3
+    request_interval_seconds: 0.5
+
+  request:
+    method: GET
+    headers:
+      Referer: https://www.cec-ec.com.cn/cms/channel/1xmgg3/index.htm
+      Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8
+      Accept-Language: zh-CN,zh;q=0.9,en;q=0.8
+    params: {}
+    timeout_seconds: 40
+    retries: 2
+    retry_backoff_seconds: 0.8
+    verify_ssl: true
+
+  pagination:
+    mode: page_param
+    page_param: pageNo
+    start_page: 1
+    end_page: 3
+
+  crypto:
+    enabled: false
+
+  cookie:
+    enabled: false
+
+  dedup:
+    redis_hash_key: zhaobiao:domian:linkqc
+    ttl_days: 30
+    prune_probability: 0.01
+
+  list_extraction:
+    response_html_selectors: []
+    item_selectors:
+      - kind: xpath
+        expr: //div[contains(@class, "bidlist")]//ul[@id="list1"]/li//a
+    link_selectors:
+      - kind: xpath
+        expr: ./@href
+    title_selectors:
+      - kind: xpath
+        expr: ./@title
+    date_selectors:
+      - kind: xpath
+        expr: .//em//text()
+    min_title_length: 8
+    fallback_auto: false
+
+  detail_extraction:
+    response_html_selectors: []
+    content_selectors:
+      - kind: xpath
+        expr: //div[@class="main-text"]
+    title_selectors:
+      - kind: xpath
+        expr: //div[@class="article-title"]//text()
+    date_selectors:
+      - kind: regex
+        expr: "发布时间：\\s*(\\d{4}-\\d{1,2}-\\d{1,2}(?:\\s+\\d{1,2}:\\d{1,2}:\\d{1,2})?)"
+    fallback_auto: false
+    fallback_readability: false
+    min_content_length: 30
+
+  attachments:
+    enabled: true
+    selectors:
+      - kind: xpath
+        expr: //div[@class="text"]//a/@href
+    filename_selectors:
+      - kind: xpath
+        expr: //div[@class="text"]//a//text()
+    allowed_extensions: []
+    max_bytes: 52428800
+
+  classification:
+    # 实测 3 页 30 条（其中 1 条空标题被过滤）全部是 中标公告/中标结果公示/中标候选人公示
+    # 属固定结果栏目，故 zhongbiao_keywords 置空（用户规则）
+    default_type: zhongbiao
+    zhongbiao_keywords: []
+
+  area_extraction:
+    enabled: true
+    use_title_first: true
+
+  output:
+    enabled: true
+    queue_zhaobiao: zhaobiao:result:zhaobiao
+    queue_zhongbiao: zhaobiao:result:zhongbiao
+    attachment_dir_zhaobiao: /root/pachong/zhaobiao/data/附件
+    attachment_dir_zhongbiao: /root/pachong/zhaobiao/data_zb/附件
+
+- id: cec_cggg
+  enabled: true
+  name: CEC电子采购平台-非招标采购信息-采购公告
+  entry_urls:
+    - https://www.cec-ec.com.cn/cms/channel/2xmgg1/index.htm
+    - https://www.cec-ec.com.cn/cms/channel/2xmgg1/index.htm
+    - https://www.cec-ec.com.cn/cms/channel/2xmgg1/index.htm
+
+  schedule:
+    enabled: true
+    interval_seconds: 3600
+
+  limits:
+    max_concurrency: 3
+    request_interval_seconds: 0.5
+
+  request:
+    method: GET
+    headers:
+      Referer: https://www.cec-ec.com.cn/cms/channel/2xmgg1/index.htm
+      Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8
+      Accept-Language: zh-CN,zh;q=0.9,en;q=0.8
+    params: {}
+    timeout_seconds: 40
+    retries: 2
+    retry_backoff_seconds: 0.8
+    verify_ssl: true
+
+  pagination:
+    mode: page_param
+    page_param: pageNo
+    start_page: 1
+    end_page: 3
+
+  crypto:
+    enabled: false
+
+  cookie:
+    enabled: false
+
+  dedup:
+    redis_hash_key: zhaobiao:domian:linkqc
+    ttl_days: 30
+    prune_probability: 0.01
+
+  list_extraction:
+    response_html_selectors: []
+    item_selectors:
+      - kind: xpath
+        expr: //div[contains(@class, "bidlist")]//ul[@id="list1"]/li//a
+    link_selectors:
+      - kind: xpath
+        expr: ./@href
+    title_selectors:
+      - kind: xpath
+        expr: ./@title
+    date_selectors:
+      - kind: xpath
+        expr: .//em//text()
+    min_title_length: 8
+    fallback_auto: false
+
+  detail_extraction:
+    response_html_selectors: []
+    content_selectors:
+      - kind: xpath
+        expr: //div[@class="main-text"]
+    title_selectors:
+      - kind: xpath
+        expr: //div[@class="article-title"]//text()
+    date_selectors:
+      - kind: regex
+        expr: "发布时间：\\s*(\\d{4}-\\d{1,2}-\\d{1,2}(?:\\s+\\d{1,2}:\\d{1,2}:\\d{1,2})?)"
+    fallback_auto: false
+    fallback_readability: false
+    min_content_length: 30
+
+  attachments:
+    enabled: true
+    selectors:
+      - kind: xpath
+        expr: //div[@class="text"]//a/@href
+    filename_selectors:
+      - kind: xpath
+        expr: //div[@class="text"]//a//text()
+    allowed_extensions: []
+    max_bytes: 52428800
+
+  classification:
+    # 三页 30 条全部是 项目公告/事前公示/谈判采购/竞价采购/直接采购，无结果类 → 固定 zhaobiao
+    default_type: zhaobiao
+    zhongbiao_keywords: []
+
+  area_extraction:
+    enabled: true
+    use_title_first: true
+
+  output:
+    enabled: true
+    queue_zhaobiao: zhaobiao:result:zhaobiao
+    queue_zhongbiao: zhaobiao:result:zhongbiao
+    attachment_dir_zhaobiao: /root/pachong/zhaobiao/data/附件
+    attachment_dir_zhongbiao: /root/pachong/zhaobiao/data_zb/附件
+
+- id: cec_cgbgg
+  enabled: true
+  name: CEC电子采购平台-非招标采购信息-变更公告
+  entry_urls:
+    - https://www.cec-ec.com.cn/cms/channel/2xmgg2/index.htm
+    - https://www.cec-ec.com.cn/cms/channel/2xmgg2/index.htm
+    - https://www.cec-ec.com.cn/cms/channel/2xmgg2/index.htm
+
+  schedule:
+    enabled: true
+    interval_seconds: 3600
+
+  limits:
+    max_concurrency: 3
+    request_interval_seconds: 0.5
+
+  request:
+    method: GET
+    headers:
+      Referer: https://www.cec-ec.com.cn/cms/channel/2xmgg2/index.htm
+      Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8
+      Accept-Language: zh-CN,zh;q=0.9,en;q=0.8
+    params: {}
+    timeout_seconds: 40
+    retries: 2
+    retry_backoff_seconds: 0.8
+    verify_ssl: true
+
+  pagination:
+    mode: page_param
+    page_param: pageNo
+    start_page: 1
+    end_page: 3
+
+  crypto:
+    enabled: false
+
+  cookie:
+    enabled: false
+
+  dedup:
+    redis_hash_key: zhaobiao:domian:linkqc
+    ttl_days: 30
+    prune_probability: 0.01
+
+  list_extraction:
+    response_html_selectors: []
+    item_selectors:
+      - kind: xpath
+        expr: //div[contains(@class, "bidlist")]//ul[@id="list1"]/li//a
+    link_selectors:
+      - kind: xpath
+        expr: ./@href
+    title_selectors:
+      - kind: xpath
+        expr: ./@title
+    date_selectors:
+      - kind: xpath
+        expr: .//em//text()
+    min_title_length: 8
+    fallback_auto: false
+
+  detail_extraction:
+    response_html_selectors: []
+    content_selectors:
+      - kind: xpath
+        expr: //div[@class="main-text"]
+    title_selectors:
+      - kind: xpath
+        expr: //div[@class="article-title"]//text()
+    date_selectors:
+      - kind: regex
+        expr: "发布时间：\\s*(\\d{4}-\\d{1,2}-\\d{1,2}(?:\\s+\\d{1,2}:\\d{1,2}:\\d{1,2})?)"
+    fallback_auto: false
+    fallback_readability: false
+    min_content_length: 30
+
+  attachments:
+    enabled: true
+    selectors:
+      - kind: xpath
+        expr: //div[@class="text"]//a/@href
+    filename_selectors:
+      - kind: xpath
+        expr: //div[@class="text"]//a//text()
+    allowed_extensions: []
+    max_bytes: 52428800
+
+  classification:
+    # 该栏目 3 页 30 条标题全部是变更/澄清/更正/延期/补充公告，无结果类；且站方正文极短
+    # （第 1 页 10 条中 7 条正文 <30 字，实测只有 3 条能产出记录），因此用固定 zhaobiao，
+    # 不做关键词分流：既没有结果类可分流，多一个词表反而增加正文偶发命中的风险。
+    default_type: zhaobiao
+    zhongbiao_keywords: []
+
+  area_extraction:
+    enabled: true
+    use_title_first: true
+
+  output:
+    enabled: true
+    queue_zhaobiao: zhaobiao:result:zhaobiao
+    queue_zhongbiao: zhaobiao:result:zhongbiao
+    attachment_dir_zhaobiao: /root/pachong/zhaobiao/data/附件
+    attachment_dir_zhongbiao: /root/pachong/zhaobiao/data_zb/附件
+
+- id: cec_cgjggs
+  enabled: true
+  name: CEC电子采购平台-非招标采购信息-采购结果公示
+  entry_urls:
+    - https://www.cec-ec.com.cn/cms/channel/2xmgg3/index.htm
+    - https://www.cec-ec.com.cn/cms/channel/2xmgg3/index.htm
+    - https://www.cec-ec.com.cn/cms/channel/2xmgg3/index.htm
+
+  schedule:
+    enabled: true
+    interval_seconds: 3600
+
+  limits:
+    max_concurrency: 3
+    request_interval_seconds: 0.5
+
+  request:
+    method: GET
+    headers:
+      Referer: https://www.cec-ec.com.cn/cms/channel/2xmgg3/index.htm
+      Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8
+      Accept-Language: zh-CN,zh;q=0.9,en;q=0.8
+    params: {}
+    timeout_seconds: 40
+    retries: 2
+    retry_backoff_seconds: 0.8
+    verify_ssl: true
+
+  pagination:
+    mode: page_param
+    page_param: pageNo
+    start_page: 1
+    end_page: 3
+
+  crypto:
+    enabled: false
+
+  cookie:
+    enabled: false
+
+  dedup:
+    redis_hash_key: zhaobiao:domian:linkqc
+    ttl_days: 30
+    prune_probability: 0.01
+
+  list_extraction:
+    response_html_selectors: []
+    item_selectors:
+      - kind: xpath
+        expr: //div[contains(@class, "bidlist")]//ul[@id="list1"]/li//a
+    link_selectors:
+      - kind: xpath
+        expr: ./@href
+    title_selectors:
+      - kind: xpath
+        expr: ./@title
+    date_selectors:
+      - kind: xpath
+        expr: .//em//text()
+    min_title_length: 8
+    fallback_auto: false
+
+  detail_extraction:
+    response_html_selectors: []
+    content_selectors:
+      - kind: xpath
+        expr: //div[@class="main-text"]
+    title_selectors:
+      - kind: xpath
+        expr: //div[@class="article-title"]//text()
+    date_selectors:
+      - kind: regex
+        expr: "发布时间：\\s*(\\d{4}-\\d{1,2}-\\d{1,2}(?:\\s+\\d{1,2}:\\d{1,2}:\\d{1,2})?)"
+    fallback_auto: false
+    fallback_readability: false
+    min_content_length: 30
+
+  attachments:
+    enabled: true
+    selectors:
+      - kind: xpath
+        expr: //div[@class="text"]//a/@href
+    filename_selectors:
+      - kind: xpath
+        expr: //div[@class="text"]//a//text()
+    allowed_extensions: []
+    max_bytes: 52428800
+
+  classification:
+    # 三页 30 条全部是 成交公告/中标候选人公示/成交结果公示，属固定结果栏目
+    default_type: zhongbiao
+    zhongbiao_keywords: []
+
+  area_extraction:
+    enabled: true
+    use_title_first: true
+
+  output:
+    enabled: true
+    queue_zhaobiao: zhaobiao:result:zhaobiao
+    queue_zhongbiao: zhaobiao:result:zhongbiao
+    attachment_dir_zhaobiao: /root/pachong/zhaobiao/data/附件
+    attachment_dir_zhongbiao: /root/pachong/zhaobiao/data_zb/附件

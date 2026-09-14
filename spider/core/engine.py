@@ -572,6 +572,7 @@ class SpiderEngine(object):
                 site_id=site.id,
                 source_url=item.url,
                 attachment_names=attachment_names,
+                reject_login_pages=site.attachments.reject_login_pages,
             )
 
             payload = {

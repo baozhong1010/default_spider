@@ -1,0 +1,980 @@
+﻿# 鞍钢集团电子招投标交易平台（鞍钢集团招标 / 供应商门户）
+#
+# ============================ 站点可达性（实测结论）============================
+# 【http 可用 / https 不可用】
+#   * https://bid.ansteelscm.com/  → 本机 OpenSSL 1.0.2q 下 TLS 握手失败
+#     （curl: "EOF occurred in violation of protocol"），因此本配置**全链路只用 http://**。
+#   * http://bid.ansteelscm.com/   → 302 → https://www.ansteelscm.com/（返回 200，约 19.6KB，
+#     title「鞍钢集团供应商客户信息平台」）。
+#   * 关键点：**接口必须走 http://www.ansteelscm.com**
+#       - POST http://bid.ansteelscm.com/notice/... → 405 Not Allowed（Tengine 直接拒）
+#       - GET  http://bid.ansteelscm.com/notice/... → 302 跳转 https（老 OpenSSL 下不可用）
+#       - POST http://www.ansteelscm.com/notice/... → 200 JSON ✔（实测）
+#   * 站点响应头声明 charset=utf-8，JSON 正文为**规范 UTF-8**（已按字节校验），中文无乱码。
+#
+# ============================ 门户结构（前端 SPA + 后端 JSON 接口）============
+# 入口：http://bid.ansteelscm.com/cpu-angang-bid-fe/webportal.html
+#       （title「鞍钢集团电子招投标交易平台」，Knockout 首页，js/main/main.js + webportal.js）
+# 首页 4 个采购大类（purchaseType）与 3 个公告页签（noticeType）：
+#   purchaseType: 1=工程  2=原燃材料  3=服务  4=设备备件
+#   noticeType  : 21=招采公告/预审公告  23=变更公告  22=中标公告/公示
+# 统一的列表接口（POST JSON，见 webportal.js 的 loadData1..4）：
+#   POST /notice/pjtnotice/getPjtByPurchaseType
+#   body: {pageNum:0起, pageSize:N, purchaseType:X, noticeType:Y}
+#   响应: {status:1, data:{total, pages, list:[...]}}
+#   实测 total（noticeType=21 招采公告）：工程 15532 / 原燃材料 40821 / 服务 7947 / 设备备件 72957
+#        total（noticeType=22 中标公告）：工程 12951 / 原燃材料 34533 / 服务 9583 / 设备备件 52119
+#   list 条目字段：id(公告记录ID) / billId(项目单据ID) / title / publishTime(毫秒时间戳) /
+#                 noticeType(明细类型) / contentId / purchaseType / purOrgName / bidProjectCode ...
+#   noticeType 明细含义（由首页 portalcas 跳转逻辑反推）：
+#     1/3/5/7 = 招标/采购公告正文  2/4/6/8/10/12/14 = 变更类  9/11/13 = 中标候选人公示/中标结果公告
+#
+# ============================ 接口调用上的两个硬约束（踩坑记录）==============
+# 1) 必填参数必须全在 POST body，且**接口完全忽略 URL 查询串**：
+#      只给 ?purchaseType=2&pageNum=1 而 body 只有 {noticeType,pageSize}
+#        → HTTP 200 但 {"status":0,"data":null,"success":false}
+#          （不是 401/403/412，极易被误判为“风控/需要登录”，其实是缺参数）
+#      把 pageNum/pageSize/purchaseType/noticeType 全放进 body → {"status":1,...,"list":[...]}
+#    ⇒ 分页只能用 mode=json_template；page_param 只会把页码拼到 URL 上，服务端读不到。
+# 2) json_template 只支持 {page} / {page_index} / {base_url} 三个占位符，没有「entry 序号」；
+#    而 purchaseType 是**强类型数字**（实测 body 传 "1" 数字字符串可以，
+#    传 "http://...?pt=1"/"x1"/"https://x|1" 等非纯数字串 → total=0）。
+#    ⇒ 无法用 {base_url} 把大类编号搬进 body，改为「每个采购大类一个 site」：
+#      共 8 个 site（2 公告栏目 × 4 采购大类），字段完全相同，只有名称与 json_template 的
+#      purchaseType 常量不同。单个 site 每个 run 只打 页数 个列表请求，站点压力更小。
+#    （框架侧未做任何改动，sites/ 其他文件也未改动。）
+#
+# ============================ 详情接口（两个，均为公开、无需登录）============
+# 1) GET /notice/pjtnotice/getPjtNoticeById?id={公告记录ID}
+#    → data.title / data.publishTime / data.noticeUrl
+#    noticeUrl 即**公告正文 HTML**（<table> 版式）。
+#    实测：noticeType=9/11（中标候选人公示、中标结果公告）noticeUrl 非空（1.9K~3.2K 字符）；
+#          noticeType=1/3/5（招标/采购公告）noticeUrl 为 null。
+#    另有 /notice/content/queryById?id={contentId} 返回等价正文（data.noticeValue），可作备用。
+# 2) GET /notice/pjtnotice/getBidProjectNoticeByBillId?id={billId}
+#    → 项目单据全量 JSON（含 sectionVOs[]）：项目编号/名称、委托单位、标段号/名称、招标方式、
+#      标书售价、投标保证金、标书购买截止、开标时间/地点、技术/商务要求、付款方式、评审状态等。
+#    ⚠️ 该接口只按 billId 取项目单据，**与公告记录不是一对一**（同一次开标对应多份公告）：
+#       实测拿某条中标公告的 billId=138776 去查，返回的是另一个项目
+#       （「鞍钢铸钢电气柜及电磁流量计多功能表维修」），与公告标题不符。
+#       故本配置**不把它作为正文来源**，避免正文张冠李戴；招标类正文改由 $.data 结构化回填。
+#
+# ============================ 栏目与分类 ============================
+# 两个栏目均为「栏目固定分类」，不做关键词二次判定（zhongbiao_keywords: []）：
+#   招采公告/预审公告（noticeType=21）→ classification.default_type: zhaobiao
+#   中标公告/公示  （noticeType=22）→ classification.default_type: zhongbiao
+# 未纳入：变更公告（noticeType=23，正文同样为 null、明细类型混杂）；
+#   首页的 系统公告/寻源公告/重要公告/用户手册（POST /notice/repository/selectByCondition，
+#   body 形如 {"placeTheColumn":"系统公告"}），本次未纳入。
+#
+# ============================ 稳定性与限速 ============================
+# * 该站不敏感于低频抓取；每个 site 一次 run 只有 end_page 个列表请求，
+#   仍按 0.6s 间隔、并发 2 保守限速。
+# * verify_ssl 关闭（站点证书链与老 OpenSSL 兼容性差），且全站走 http。
+
+# ---------------------------------------------------------------------------
+# 栏目一：招采公告 / 预审公告（noticeType=21）→ zhaobiao
+# ---------------------------------------------------------------------------
+- id: ansteel_bid_notice_engineering
+  enabled: true
+  name: 鞍钢集团电子招投标交易平台-招采公告-工程
+  # entry_url 仅作接口地址（服务端忽略其查询串）；purchaseType 真实值见 pagination.json_template
+  entry_urls:
+    - http://www.ansteelscm.com/notice/pjtnotice/getPjtByPurchaseType
+
+  schedule:
+    enabled: true
+    interval_seconds: 3600
+
+  limits:
+    max_concurrency: 2
+    request_interval_seconds: 0.6
+
+  request:
+    method: POST
+    headers:
+      Accept: application/json, text/plain, */*
+      Referer: http://bid.ansteelscm.com/cpu-angang-bid-fe/webportal.html
+      Origin: http://bid.ansteelscm.com
+      X-Requested-With: XMLHttpRequest
+    # 参数必须全在 body；这里只作兜底，真正下发的 body 由 pagination.json_template 整份提供
+    params: {}
+    json:
+      pageNum: 0
+      pageSize: 20
+      purchaseType: 1
+      noticeType: 21
+    timeout_seconds: 40
+    retries: 2
+    retry_backoff_seconds: 0.8
+    verify_ssl: false
+    # 纯 JSON 接口，不能用 chrome --dump-dom（会渲染成空 DOM）
+    use_chrome: false
+
+  pagination:
+    # purchaseType=1 工程；noticeType=21 招采公告；{page_index} 0 起（pageNum 0 = 第 1 页）
+    mode: json_template
+    json_template: '{"pageNum":{page_index},"pageSize":20,"purchaseType":1,"noticeType":21}'
+    start_page: 1
+    end_page: 3
+
+  crypto:
+    enabled: false
+
+  detail_request:
+    method: GET
+    # {value} = 列表条目 link_selectors 取到的公告记录 id
+    url_template: "http://www.ansteelscm.com/notice/pjtnotice/getPjtNoticeById?id={value}"
+
+  cookie:
+    enabled: false
+
+  dedup:
+    redis_hash_key: zhaobiao:domian:linkqc
+    ttl_days: 30
+    prune_probability: 0.01
+
+  list_extraction:
+    response_html_selectors: []
+    item_selectors:
+      - kind: jsonpath
+        expr: $.data.list[*]
+    # link 取公告记录 id：既作原文链接参数，又作详情接口的 {value}
+    link_selectors:
+      - kind: jsonpath
+        expr: $.id
+    title_selectors:
+      - kind: jsonpath
+        expr: $.title
+    date_selectors:
+      - kind: jsonpath
+        expr: $.publishTime
+    # 原文链接指向人类可读的招标公告页（portalcas SPA hash 路由）
+    detail_url_template: "http://bid.ansteelscm.com/cpu-angang-bid-fe/portalcas.html#/pages/supply_notice/zb_index?id={id}&noticeType=21&purchaseType={purchaseType}"
+    min_title_length: 2
+    fallback_auto: false
+
+  detail_extraction:
+    response_html_selectors: []
+    content_selectors:
+      # 招标/采购公告（明细 noticeType=1/3/5...）的 noticeUrl 为 null，正文不在公告表里：
+      # 详情响应是项目单据 JSON，这里直接落 $.data（含 sectionVOs[]：项目编号/标段/开标时间/
+      # 保证金/技术商务要求/付款方式等），由框架 to_plain_text 归一化后入库。
+      - kind: jsonpath
+        expr: $.data
+    # 完整标题回填（列表标题即全称，此处保持一致）
+    title_selectors:
+      - kind: jsonpath
+        expr: $.data.title
+    # 发布时间回填（毫秒时间戳，框架自动转日期）
+    date_selectors:
+      - kind: jsonpath
+        expr: $.data.publishTime
+    fallback_auto: true
+    fallback_readability: false
+    min_content_length: 30
+
+  attachments:
+    # 招标类公告正文/详情 JSON 中均无附件链接（实测 0 个 href/src），保持 enabled 但不产出附件
+    enabled: true
+    selectors: []
+    allowed_extensions: []
+    max_bytes: 52428800
+
+  classification:
+    default_type: zhaobiao
+    zhongbiao_keywords: []
+
+  area_extraction:
+    # 该站无地区字段；标题/正文含「鞍钢/本钢/四川银行」等，交由启发式识别（命中辽宁/四川等），
+    # 无命中时地区留空而不是误判。
+    enabled: true
+    use_title_first: true
+
+  output:
+    enabled: true
+    queue_zhaobiao: zhaobiao:result:zhaobiao
+    queue_zhongbiao: zhaobiao:result:zhongbiao
+    attachment_dir_zhaobiao: /root/pachong/zhaobiao/data/附件
+    attachment_dir_zhongbiao: /root/pachong/zhaobiao/data_zb/附件
+
+- id: ansteel_bid_notice_material
+  enabled: true
+  name: 鞍钢集团电子招投标交易平台-招采公告-原燃材料
+  entry_urls:
+    - http://www.ansteelscm.com/notice/pjtnotice/getPjtByPurchaseType
+
+  schedule:
+    enabled: true
+    interval_seconds: 3600
+
+  limits:
+    max_concurrency: 2
+    request_interval_seconds: 0.6
+
+  request:
+    method: POST
+    headers:
+      Accept: application/json, text/plain, */*
+      Referer: http://bid.ansteelscm.com/cpu-angang-bid-fe/webportal.html
+      Origin: http://bid.ansteelscm.com
+      X-Requested-With: XMLHttpRequest
+    params: {}
+    json:
+      pageNum: 0
+      pageSize: 20
+      purchaseType: 2
+      noticeType: 21
+    timeout_seconds: 40
+    retries: 2
+    retry_backoff_seconds: 0.8
+    verify_ssl: false
+    use_chrome: false
+
+  pagination:
+    mode: json_template
+    json_template: '{"pageNum":{page_index},"pageSize":20,"purchaseType":2,"noticeType":21}'
+    start_page: 1
+    end_page: 3
+
+  crypto:
+    enabled: false
+
+  detail_request:
+    method: GET
+    url_template: "http://www.ansteelscm.com/notice/pjtnotice/getPjtNoticeById?id={value}"
+
+  cookie:
+    enabled: false
+
+  dedup:
+    redis_hash_key: zhaobiao:domian:linkqc
+    ttl_days: 30
+    prune_probability: 0.01
+
+  list_extraction:
+    response_html_selectors: []
+    item_selectors:
+      - kind: jsonpath
+        expr: $.data.list[*]
+    link_selectors:
+      - kind: jsonpath
+        expr: $.id
+    title_selectors:
+      - kind: jsonpath
+        expr: $.title
+    date_selectors:
+      - kind: jsonpath
+        expr: $.publishTime
+    detail_url_template: "http://bid.ansteelscm.com/cpu-angang-bid-fe/portalcas.html#/pages/supply_notice/zb_index?id={id}&noticeType=21&purchaseType={purchaseType}"
+    min_title_length: 2
+    fallback_auto: false
+
+  detail_extraction:
+    response_html_selectors: []
+    content_selectors:
+      - kind: jsonpath
+        expr: $.data
+    title_selectors:
+      - kind: jsonpath
+        expr: $.data.title
+    date_selectors:
+      - kind: jsonpath
+        expr: $.data.publishTime
+    fallback_auto: true
+    fallback_readability: false
+    min_content_length: 30
+
+  attachments:
+    enabled: true
+    selectors: []
+    allowed_extensions: []
+    max_bytes: 52428800
+
+  classification:
+    default_type: zhaobiao
+    zhongbiao_keywords: []
+
+  area_extraction:
+    enabled: true
+    use_title_first: true
+
+  output:
+    enabled: true
+    queue_zhaobiao: zhaobiao:result:zhaobiao
+    queue_zhongbiao: zhaobiao:result:zhongbiao
+    attachment_dir_zhaobiao: /root/pachong/zhaobiao/data/附件
+    attachment_dir_zhongbiao: /root/pachong/zhaobiao/data_zb/附件
+
+- id: ansteel_bid_notice_service
+  enabled: true
+  name: 鞍钢集团电子招投标交易平台-招采公告-服务
+  entry_urls:
+    - http://www.ansteelscm.com/notice/pjtnotice/getPjtByPurchaseType
+
+  schedule:
+    enabled: true
+    interval_seconds: 3600
+
+  limits:
+    max_concurrency: 2
+    request_interval_seconds: 0.6
+
+  request:
+    method: POST
+    headers:
+      Accept: application/json, text/plain, */*
+      Referer: http://bid.ansteelscm.com/cpu-angang-bid-fe/webportal.html
+      Origin: http://bid.ansteelscm.com
+      X-Requested-With: XMLHttpRequest
+    params: {}
+    json:
+      pageNum: 0
+      pageSize: 20
+      purchaseType: 3
+      noticeType: 21
+    timeout_seconds: 40
+    retries: 2
+    retry_backoff_seconds: 0.8
+    verify_ssl: false
+    use_chrome: false
+
+  pagination:
+    mode: json_template
+    json_template: '{"pageNum":{page_index},"pageSize":20,"purchaseType":3,"noticeType":21}'
+    start_page: 1
+    end_page: 3
+
+  crypto:
+    enabled: false
+
+  detail_request:
+    method: GET
+    url_template: "http://www.ansteelscm.com/notice/pjtnotice/getPjtNoticeById?id={value}"
+
+  cookie:
+    enabled: false
+
+  dedup:
+    redis_hash_key: zhaobiao:domian:linkqc
+    ttl_days: 30
+    prune_probability: 0.01
+
+  list_extraction:
+    response_html_selectors: []
+    item_selectors:
+      - kind: jsonpath
+        expr: $.data.list[*]
+    link_selectors:
+      - kind: jsonpath
+        expr: $.id
+    title_selectors:
+      - kind: jsonpath
+        expr: $.title
+    date_selectors:
+      - kind: jsonpath
+        expr: $.publishTime
+    detail_url_template: "http://bid.ansteelscm.com/cpu-angang-bid-fe/portalcas.html#/pages/supply_notice/zb_index?id={id}&noticeType=21&purchaseType={purchaseType}"
+    min_title_length: 2
+    fallback_auto: false
+
+  detail_extraction:
+    response_html_selectors: []
+    content_selectors:
+      - kind: jsonpath
+        expr: $.data
+    title_selectors:
+      - kind: jsonpath
+        expr: $.data.title
+    date_selectors:
+      - kind: jsonpath
+        expr: $.data.publishTime
+    fallback_auto: true
+    fallback_readability: false
+    min_content_length: 30
+
+  attachments:
+    enabled: true
+    selectors: []
+    allowed_extensions: []
+    max_bytes: 52428800
+
+  classification:
+    default_type: zhaobiao
+    zhongbiao_keywords: []
+
+  area_extraction:
+    enabled: true
+    use_title_first: true
+
+  output:
+    enabled: true
+    queue_zhaobiao: zhaobiao:result:zhaobiao
+    queue_zhongbiao: zhaobiao:result:zhongbiao
+    attachment_dir_zhaobiao: /root/pachong/zhaobiao/data/附件
+    attachment_dir_zhongbiao: /root/pachong/zhaobiao/data_zb/附件
+
+- id: ansteel_bid_notice_device
+  enabled: true
+  name: 鞍钢集团电子招投标交易平台-招采公告-设备备件
+  entry_urls:
+    - http://www.ansteelscm.com/notice/pjtnotice/getPjtByPurchaseType
+
+  schedule:
+    enabled: true
+    interval_seconds: 3600
+
+  limits:
+    max_concurrency: 2
+    request_interval_seconds: 0.6
+
+  request:
+    method: POST
+    headers:
+      Accept: application/json, text/plain, */*
+      Referer: http://bid.ansteelscm.com/cpu-angang-bid-fe/webportal.html
+      Origin: http://bid.ansteelscm.com
+      X-Requested-With: XMLHttpRequest
+    params: {}
+    json:
+      pageNum: 0
+      pageSize: 20
+      purchaseType: 4
+      noticeType: 21
+    timeout_seconds: 40
+    retries: 2
+    retry_backoff_seconds: 0.8
+    verify_ssl: false
+    use_chrome: false
+
+  pagination:
+    mode: json_template
+    json_template: '{"pageNum":{page_index},"pageSize":20,"purchaseType":4,"noticeType":21}'
+    start_page: 1
+    end_page: 3
+
+  crypto:
+    enabled: false
+
+  detail_request:
+    method: GET
+    url_template: "http://www.ansteelscm.com/notice/pjtnotice/getPjtNoticeById?id={value}"
+
+  cookie:
+    enabled: false
+
+  dedup:
+    redis_hash_key: zhaobiao:domian:linkqc
+    ttl_days: 30
+    prune_probability: 0.01
+
+  list_extraction:
+    response_html_selectors: []
+    item_selectors:
+      - kind: jsonpath
+        expr: $.data.list[*]
+    link_selectors:
+      - kind: jsonpath
+        expr: $.id
+    title_selectors:
+      - kind: jsonpath
+        expr: $.title
+    date_selectors:
+      - kind: jsonpath
+        expr: $.publishTime
+    detail_url_template: "http://bid.ansteelscm.com/cpu-angang-bid-fe/portalcas.html#/pages/supply_notice/zb_index?id={id}&noticeType=21&purchaseType={purchaseType}"
+    min_title_length: 2
+    fallback_auto: false
+
+  detail_extraction:
+    response_html_selectors: []
+    content_selectors:
+      - kind: jsonpath
+        expr: $.data
+    title_selectors:
+      - kind: jsonpath
+        expr: $.data.title
+    date_selectors:
+      - kind: jsonpath
+        expr: $.data.publishTime
+    fallback_auto: true
+    fallback_readability: false
+    min_content_length: 30
+
+  attachments:
+    enabled: true
+    selectors: []
+    allowed_extensions: []
+    max_bytes: 52428800
+
+  classification:
+    default_type: zhaobiao
+    zhongbiao_keywords: []
+
+  area_extraction:
+    enabled: true
+    use_title_first: true
+
+  output:
+    enabled: true
+    queue_zhaobiao: zhaobiao:result:zhaobiao
+    queue_zhongbiao: zhaobiao:result:zhongbiao
+    attachment_dir_zhaobiao: /root/pachong/zhaobiao/data/附件
+    attachment_dir_zhongbiao: /root/pachong/zhaobiao/data_zb/附件
+
+# ---------------------------------------------------------------------------
+# 栏目二：中标公告 / 公示（noticeType=22）→ zhongbiao
+# ---------------------------------------------------------------------------
+- id: ansteel_bid_result_engineering
+  enabled: true
+  name: 鞍钢集团电子招投标交易平台-中标公告-工程
+  entry_urls:
+    - http://www.ansteelscm.com/notice/pjtnotice/getPjtByPurchaseType
+
+  schedule:
+    enabled: true
+    interval_seconds: 3600
+
+  limits:
+    max_concurrency: 2
+    request_interval_seconds: 0.6
+
+  request:
+    method: POST
+    headers:
+      Accept: application/json, text/plain, */*
+      Referer: http://bid.ansteelscm.com/cpu-angang-bid-fe/webportal.html
+      Origin: http://bid.ansteelscm.com
+      X-Requested-With: XMLHttpRequest
+    params: {}
+    json:
+      pageNum: 0
+      pageSize: 20
+      purchaseType: 1
+      noticeType: 22
+    timeout_seconds: 40
+    retries: 2
+    retry_backoff_seconds: 0.8
+    verify_ssl: false
+    use_chrome: false
+
+  pagination:
+    # purchaseType=1 工程；noticeType=22 中标公告/公示（明细含 9=中标候选人公示、11=中标结果公告）
+    mode: json_template
+    json_template: '{"pageNum":{page_index},"pageSize":20,"purchaseType":1,"noticeType":22}'
+    start_page: 1
+    end_page: 3
+
+  crypto:
+    enabled: false
+
+  detail_request:
+    method: GET
+    url_template: "http://www.ansteelscm.com/notice/pjtnotice/getPjtNoticeById?id={value}"
+
+  cookie:
+    enabled: false
+
+  dedup:
+    redis_hash_key: zhaobiao:domian:linkqc
+    ttl_days: 30
+    prune_probability: 0.01
+
+  list_extraction:
+    response_html_selectors: []
+    item_selectors:
+      - kind: jsonpath
+        expr: $.data.list[*]
+    link_selectors:
+      - kind: jsonpath
+        expr: $.id
+    title_selectors:
+      - kind: jsonpath
+        expr: $.title
+    date_selectors:
+      - kind: jsonpath
+        expr: $.publishTime
+    # 原文链接指向人类可读的中标公告页（portalcas SPA hash 路由）
+    detail_url_template: "http://bid.ansteelscm.com/cpu-angang-bid-fe/portalcas.html#/pages/supply_notice/index?id={id}&noticeType=22&purchaseType={purchaseType}"
+    min_title_length: 2
+    fallback_auto: false
+
+  detail_extraction:
+    response_html_selectors: []
+    content_selectors:
+      # 中标候选人公示 / 中标结果公告的正文 HTML（<table> 版式：项目编号、委托方、标段名称、
+      # 中标单位、中标总金额、备注说明）
+      - kind: jsonpath
+        expr: $.data.noticeUrl
+      # 兜底：/notice/content/queryById 形态（data.noticeValue）；正文为空时整体落 $.data
+      - kind: jsonpath
+        expr: $.data.noticeValue
+      - kind: jsonpath
+        expr: $.data
+    title_selectors:
+      - kind: jsonpath
+        expr: $.data.title
+    date_selectors:
+      - kind: jsonpath
+        expr: $.data.publishTime
+    fallback_auto: true
+    fallback_readability: false
+    min_content_length: 30
+
+  attachments:
+    # 实测 12 条中标公告正文中 0 个 href/src，站点不提供附件下载
+    enabled: true
+    selectors: []
+    allowed_extensions: []
+    max_bytes: 52428800
+
+  classification:
+    default_type: zhongbiao
+    zhongbiao_keywords: []
+
+  area_extraction:
+    enabled: true
+    use_title_first: true
+
+  output:
+    enabled: true
+    queue_zhaobiao: zhaobiao:result:zhaobiao
+    queue_zhongbiao: zhaobiao:result:zhongbiao
+    attachment_dir_zhaobiao: /root/pachong/zhaobiao/data/附件
+    attachment_dir_zhongbiao: /root/pachong/zhaobiao/data_zb/附件
+
+- id: ansteel_bid_result_material
+  enabled: true
+  name: 鞍钢集团电子招投标交易平台-中标公告-原燃材料
+  entry_urls:
+    - http://www.ansteelscm.com/notice/pjtnotice/getPjtByPurchaseType
+
+  schedule:
+    enabled: true
+    interval_seconds: 3600
+
+  limits:
+    max_concurrency: 2
+    request_interval_seconds: 0.6
+
+  request:
+    method: POST
+    headers:
+      Accept: application/json, text/plain, */*
+      Referer: http://bid.ansteelscm.com/cpu-angang-bid-fe/webportal.html
+      Origin: http://bid.ansteelscm.com
+      X-Requested-With: XMLHttpRequest
+    params: {}
+    json:
+      pageNum: 0
+      pageSize: 20
+      purchaseType: 2
+      noticeType: 22
+    timeout_seconds: 40
+    retries: 2
+    retry_backoff_seconds: 0.8
+    verify_ssl: false
+    use_chrome: false
+
+  pagination:
+    mode: json_template
+    json_template: '{"pageNum":{page_index},"pageSize":20,"purchaseType":2,"noticeType":22}'
+    start_page: 1
+    end_page: 3
+
+  crypto:
+    enabled: false
+
+  detail_request:
+    method: GET
+    url_template: "http://www.ansteelscm.com/notice/pjtnotice/getPjtNoticeById?id={value}"
+
+  cookie:
+    enabled: false
+
+  dedup:
+    redis_hash_key: zhaobiao:domian:linkqc
+    ttl_days: 30
+    prune_probability: 0.01
+
+  list_extraction:
+    response_html_selectors: []
+    item_selectors:
+      - kind: jsonpath
+        expr: $.data.list[*]
+    link_selectors:
+      - kind: jsonpath
+        expr: $.id
+    title_selectors:
+      - kind: jsonpath
+        expr: $.title
+    date_selectors:
+      - kind: jsonpath
+        expr: $.publishTime
+    detail_url_template: "http://bid.ansteelscm.com/cpu-angang-bid-fe/portalcas.html#/pages/supply_notice/index?id={id}&noticeType=22&purchaseType={purchaseType}"
+    min_title_length: 2
+    fallback_auto: false
+
+  detail_extraction:
+    response_html_selectors: []
+    content_selectors:
+      - kind: jsonpath
+        expr: $.data.noticeUrl
+      - kind: jsonpath
+        expr: $.data.noticeValue
+      - kind: jsonpath
+        expr: $.data
+    title_selectors:
+      - kind: jsonpath
+        expr: $.data.title
+    date_selectors:
+      - kind: jsonpath
+        expr: $.data.publishTime
+    fallback_auto: true
+    fallback_readability: false
+    min_content_length: 30
+
+  attachments:
+    enabled: true
+    selectors: []
+    allowed_extensions: []
+    max_bytes: 52428800
+
+  classification:
+    default_type: zhongbiao
+    zhongbiao_keywords: []
+
+  area_extraction:
+    enabled: true
+    use_title_first: true
+
+  output:
+    enabled: true
+    queue_zhaobiao: zhaobiao:result:zhaobiao
+    queue_zhongbiao: zhaobiao:result:zhongbiao
+    attachment_dir_zhaobiao: /root/pachong/zhaobiao/data/附件
+    attachment_dir_zhongbiao: /root/pachong/zhaobiao/data_zb/附件
+
+- id: ansteel_bid_result_service
+  enabled: true
+  name: 鞍钢集团电子招投标交易平台-中标公告-服务
+  entry_urls:
+    - http://www.ansteelscm.com/notice/pjtnotice/getPjtByPurchaseType
+
+  schedule:
+    enabled: true
+    interval_seconds: 3600
+
+  limits:
+    max_concurrency: 2
+    request_interval_seconds: 0.6
+
+  request:
+    method: POST
+    headers:
+      Accept: application/json, text/plain, */*
+      Referer: http://bid.ansteelscm.com/cpu-angang-bid-fe/webportal.html
+      Origin: http://bid.ansteelscm.com
+      X-Requested-With: XMLHttpRequest
+    params: {}
+    json:
+      pageNum: 0
+      pageSize: 20
+      purchaseType: 3
+      noticeType: 22
+    timeout_seconds: 40
+    retries: 2
+    retry_backoff_seconds: 0.8
+    verify_ssl: false
+    use_chrome: false
+
+  pagination:
+    mode: json_template
+    json_template: '{"pageNum":{page_index},"pageSize":20,"purchaseType":3,"noticeType":22}'
+    start_page: 1
+    end_page: 3
+
+  crypto:
+    enabled: false
+
+  detail_request:
+    method: GET
+    url_template: "http://www.ansteelscm.com/notice/pjtnotice/getPjtNoticeById?id={value}"
+
+  cookie:
+    enabled: false
+
+  dedup:
+    redis_hash_key: zhaobiao:domian:linkqc
+    ttl_days: 30
+    prune_probability: 0.01
+
+  list_extraction:
+    response_html_selectors: []
+    item_selectors:
+      - kind: jsonpath
+        expr: $.data.list[*]
+    link_selectors:
+      - kind: jsonpath
+        expr: $.id
+    title_selectors:
+      - kind: jsonpath
+        expr: $.title
+    date_selectors:
+      - kind: jsonpath
+        expr: $.publishTime
+    detail_url_template: "http://bid.ansteelscm.com/cpu-angang-bid-fe/portalcas.html#/pages/supply_notice/index?id={id}&noticeType=22&purchaseType={purchaseType}"
+    min_title_length: 2
+    fallback_auto: false
+
+  detail_extraction:
+    response_html_selectors: []
+    content_selectors:
+      - kind: jsonpath
+        expr: $.data.noticeUrl
+      - kind: jsonpath
+        expr: $.data.noticeValue
+      - kind: jsonpath
+        expr: $.data
+    title_selectors:
+      - kind: jsonpath
+        expr: $.data.title
+    date_selectors:
+      - kind: jsonpath
+        expr: $.data.publishTime
+    fallback_auto: true
+    fallback_readability: false
+    min_content_length: 30
+
+  attachments:
+    enabled: true
+    selectors: []
+    allowed_extensions: []
+    max_bytes: 52428800
+
+  classification:
+    default_type: zhongbiao
+    zhongbiao_keywords: []
+
+  area_extraction:
+    enabled: true
+    use_title_first: true
+
+  output:
+    enabled: true
+    queue_zhaobiao: zhaobiao:result:zhaobiao
+    queue_zhongbiao: zhaobiao:result:zhongbiao
+    attachment_dir_zhaobiao: /root/pachong/zhaobiao/data/附件
+    attachment_dir_zhongbiao: /root/pachong/zhaobiao/data_zb/附件
+
+- id: ansteel_bid_result_device
+  enabled: true
+  name: 鞍钢集团电子招投标交易平台-中标公告-设备备件
+  entry_urls:
+    - http://www.ansteelscm.com/notice/pjtnotice/getPjtByPurchaseType
+
+  schedule:
+    enabled: true
+    interval_seconds: 3600
+
+  limits:
+    max_concurrency: 2
+    request_interval_seconds: 0.6
+
+  request:
+    method: POST
+    headers:
+      Accept: application/json, text/plain, */*
+      Referer: http://bid.ansteelscm.com/cpu-angang-bid-fe/webportal.html
+      Origin: http://bid.ansteelscm.com
+      X-Requested-With: XMLHttpRequest
+    params: {}
+    json:
+      pageNum: 0
+      pageSize: 20
+      purchaseType: 4
+      noticeType: 22
+    timeout_seconds: 40
+    retries: 2
+    retry_backoff_seconds: 0.8
+    verify_ssl: false
+    use_chrome: false
+
+  pagination:
+    mode: json_template
+    json_template: '{"pageNum":{page_index},"pageSize":20,"purchaseType":4,"noticeType":22}'
+    start_page: 1
+    end_page: 3
+
+  crypto:
+    enabled: false
+
+  detail_request:
+    method: GET
+    url_template: "http://www.ansteelscm.com/notice/pjtnotice/getPjtNoticeById?id={value}"
+
+  cookie:
+    enabled: false
+
+  dedup:
+    redis_hash_key: zhaobiao:domian:linkqc
+    ttl_days: 30
+    prune_probability: 0.01
+
+  list_extraction:
+    response_html_selectors: []
+    item_selectors:
+      - kind: jsonpath
+        expr: $.data.list[*]
+    link_selectors:
+      - kind: jsonpath
+        expr: $.id
+    title_selectors:
+      - kind: jsonpath
+        expr: $.title
+    date_selectors:
+      - kind: jsonpath
+        expr: $.publishTime
+    detail_url_template: "http://bid.ansteelscm.com/cpu-angang-bid-fe/portalcas.html#/pages/supply_notice/index?id={id}&noticeType=22&purchaseType={purchaseType}"
+    min_title_length: 2
+    fallback_auto: false
+
+  detail_extraction:
+    response_html_selectors: []
+    content_selectors:
+      - kind: jsonpath
+        expr: $.data.noticeUrl
+      - kind: jsonpath
+        expr: $.data.noticeValue
+      - kind: jsonpath
+        expr: $.data
+    title_selectors:
+      - kind: jsonpath
+        expr: $.data.title
+    date_selectors:
+      - kind: jsonpath
+        expr: $.data.publishTime
+    fallback_auto: true
+    fallback_readability: false
+    min_content_length: 30
+
+  attachments:
+    enabled: true
+    selectors: []
+    allowed_extensions: []
+    max_bytes: 52428800
+
+  classification:
+    default_type: zhongbiao
+    zhongbiao_keywords: []
+
+  area_extraction:
+    enabled: true
+    use_title_first: true
+
+  output:
+    enabled: true
+    queue_zhaobiao: zhaobiao:result:zhaobiao
+    queue_zhongbiao: zhaobiao:result:zhongbiao
+    attachment_dir_zhaobiao: /root/pachong/zhaobiao/data/附件
+    attachment_dir_zhongbiao: /root/pachong/zhaobiao/data_zb/附件

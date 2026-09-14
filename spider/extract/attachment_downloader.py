@@ -27,8 +27,9 @@ class AttachmentDownloader(object):
         site_id="",
         source_url="",
         attachment_names=None,
+        reject_login_pages=True,
     ):
-        # type: (list, RequestConfig, OutputConfig, str, str, int, str, str, Optional[list]) -> list
+        # type: (list, RequestConfig, OutputConfig, str, str, int, str, str, Optional[list], bool) -> list
         if not attachment_urls:
             return []
 
@@ -82,6 +83,19 @@ class AttachmentDownloader(object):
                 )
                 continue
 
+            # 附件接口对匿名请求常返回 200 + 登录页/错误页 HTML，校验后跳过，避免落盘假附件
+            if reject_login_pages and self._looks_like_login_page(response):
+                log_event(
+                    self.logger,
+                    logging.WARNING,
+                    "attachment.download.skipped_login_page",
+                    site_id=site_id,
+                    url=url,
+                    content_bytes=len(response.content),
+                    content_type=response.headers.get("Content-Type", ""),
+                )
+                continue
+
             # 文件名优先级：配置的 filename_selectors > 响应 Content-Disposition > URL 末段
             response_name = self._filename_from_headers(response.headers)
             filename = self._build_filename(url, name or response_name)
@@ -111,6 +125,42 @@ class AttachmentDownloader(object):
             total_urls=len(attachment_urls),
         )
         return output_files
+
+    @staticmethod
+    def _looks_like_login_page(response):
+        # type: (object) -> bool
+        """判断响应是否是「登录页/错误页」而非真实附件。
+
+        判据：文本类响应（html/json）+ 含两组以上登录特征词；
+        若响应带 Content-Disposition 文件名，则认为服务端确实在回附件，不拦截。
+        """
+        headers = getattr(response, "headers", None) or {}
+        content_type = ""
+        try:
+            for key, value in headers.items():
+                if str(key).lower() == "content-type":
+                    content_type = (value or "").lower()
+                    break
+        except Exception:
+            content_type = ""
+
+        if content_type and ("html" not in content_type and "json" not in content_type):
+            return False
+        if AttachmentDownloader._filename_from_headers(headers):
+            return False
+
+        text = (getattr(response, "text", "") or "")[:8000].lower()
+        if not text:
+            return False
+        if "<form" not in text and "login" not in text:
+            return False
+
+        score = 0
+        for marker in ("<form", "login", "password", "passwd", "验证码", "captcha",
+                       "请登录", "用户登录", "身份认证", "统一认证", "sso", "session is time out"):
+            if marker in text:
+                score += 1
+        return score >= 2
 
     @staticmethod
     def _filename_from_headers(headers):
