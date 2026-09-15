@@ -1,0 +1,230 @@
+﻿# 中储粮服务网（中储粮服务有限公司 / 中国储备粮管理集团有限公司 电子采购门户）
+# 站点：https://fwgs.sinograin.com.cn/  ——  Vue SPA（history 模式），列表/详情全部走后端 JSON 接口。
+# 完整侦察与分析过程见 search_website/sinograin_notes.md。
+#
+# ============================ 站点结构与接口 ============================
+# 前端有两个 Vite/Vue 应用：
+#   1) 门户主应用 fwgs.sinograin.com.cn/          后端前缀 /serv/portal-service/api
+#   2) 供应商业务应用 fwgs.sinograin.com.cn/sinograin-web/  后端前缀 /purchase_api
+#
+# 门户主应用公开栏目（GET /serv/portal-service/api/index/column）：
+#   重要通知 /noticeList          → POST /index/important_notice_page   【本配置采集】
+#   采购公告 /noticeProcurementList → POST /index/purchase_announcement_page
+#   采购结果公示 /resultNoticeProcurementList → POST /index/purchase_announcement_result_page
+#   站内消息                       → 列表公开接口是 POST /index/article_page（见下方说明，未配置）
+#   以上 4 个栏目可在 GET /index/columnCode 中查到 columnCode：
+#   CGGG=采购公告、CGJGGS=采购结果公示、ZNXX=站内消息、ZYTZ=重要通知
+#
+# ============================ 公开性判定（关键证据） ============================
+# /serv/portal-service/api/** 前置了统一登录过滤器：任何未鉴权请求（**包括根本不存在的路径**）
+# 一律返回 200 + {"code":100,"message":"未登录，请先登录！"}，因此不能用响应体区分
+# “路由不存在”与“需登录”。改用 HTTP 方法不匹配作为探针：公开路由会返回
+# {"code":5000,"message":"Request method 'GET' not supported"}，被拦截的则仍是 code=100。
+# 实测结论：
+#   公开 GET ：index/menu, index/column, index/columnCode, index/columnDetail,
+#              index/page_footer, index/important_notice, index/external_link,
+#              index/portalUrl, index/customer, index/slide_show
+#   公开 POST：index/important_notice_page, index/article_page, index/purchase_announcement_page,
+#              index/purchase_announcement_result_page, index/purchase_method_list,
+#              index/asset_announcement_page(缺参)
+#   需登录   ：index/article_detail, index/announcement_search, index/article 相关、
+#              index/check_order, questionConfig/detail, articleColumn/list, feedback/add、
+#              /servqycg/system-service/**、/purchase_api/**
+#
+# 【未配置的栏目及其原因（阻断）】
+#   采购公告 /noticeProcurementList（6135 条）与 采购结果公示 /resultNoticeProcurementList（17399 条）
+#   的**列表接口是公开的**，但**正文详情一律需要登录**：
+#     - 门户内详情页 /purchaseDetail 点击后弹出「该功能登录后可使用」（CDP 实测，见 notes）。
+#     - 列表项自带 detailUrl（仅“询价/竞价”类公示）指向
+#       /sinograin-web/inquiry/notice?inquiryId=..&type=1 与 /sinograin-web/bidding/notice?...&type=2，
+#       该页面会调用 POST /purchase_api/inquiry/pur/inquiry/all_info，
+#       匿名返回 {"msg":"没有权限","code":"401","success":false}（CDP 实测）。
+#     - 详情接口候选（/index/purchase_announcement_detail 等）全部被登录过滤器拦截。
+#   即：这两个栏目**列表元数据公开、正文与附件全部需登录**，按任务规则不作为可交付采集项配置，
+#   避免产出「有记录、无正文」的空壳数据。详见 sinograin_notes.md 的「阻断」章节。
+#
+# ============================ 本配置采集的栏目 ============================
+# 重要通知（columnCode=ZYTZ，栏目 id=239762731181824）
+#   列表/详情接口：POST /serv/portal-service/api/index/important_notice_page
+#   请求体：{"limit":10,"page":1}（分页参数名就是 page / limit，不是 pageNum/pageSize；
+#          站点前端 CDP 抓包实测为 {"limit":10,"page":1}）
+#   该接口匿名可用，且**响应里直接带全文 HTML（content）、发布日期（issueTime），
+#   以及附件 OBS 直链与文件名（uploadRelaVOList[*].fileUrl / fileName）**，是本站唯一
+#   的「公开列表 + 公开正文」栏目（正文可用，附件因编码问题暂未开启，见下）。
+#   当前 total=65，最新一条 2026-08-04，最早一条 2015 年前后；年更新约 8 条。
+#   内容为粮机设备/仓储设施设备入围、选型结果、采购技术规范修订征集等
+#   与中储粮集团采购直接相关的公告。
+#
+# 【正文取值说明（必须知悉，重要）】
+#   站点没有「按 id 取单篇文章」的公开接口：
+#     - /index/article_detail（DOM 实测：/noticeDetail?id=X 页面就是调它）→ code=100 需登录；
+#     - article_page / important_notice_page **不接受 id / ids / articleId / bizId / keyword 过滤**，
+#       实测传参后仍返回第 1 条；
+#     - 详情页在无登录态下渲染为空白（CDP 实测 body 只有「时间：点击：」）。
+#   因此详情请求采用「同接口 page=1&limit=1」，取回的正文**恒为当前最新一条重要通知**。
+#   item 的标题 / 日期 / 原文链接 / 去重键全部来自列表记录，逐条准确（已实测 20 条记录
+#   标题、日期、链接两两不同且与站点一致）。
+#   这是站点公开接口能力的硬约束，不是配置错误；已在 sinograin_notes.md 中列为限制项，
+#   实际投产前建议主会话确认该「正文为最新一条」的取舍是否可接受。
+#
+#   同理，area_extraction 关闭：正文恒为最新一条，其正文里的地名（如「成都储藏研究院」
+#   会命中「四川」）与 item 本身无关，启用会产出错误地区，故不输出地区而不是输出错地区。
+#
+# 【站内消息栏目未配置的原因】
+#   站内消息（columnCode=ZNXX，columnId=239762732437248）的内容可以通过
+#   POST /index/article_page {"columnId":"239762732437248","orderType":"1","limit":10,"page":1}
+#   公开取到（当前 total=2，均为「旧服务网入口 / 合同功能升级」类系统通知），
+#   属于系统运维通知、与招标采购无关，故不单独配置栏目。
+
+- id: sinograin_fw_notice
+  # ⚠️ 当前置为停用（enabled: false）：该站「重要通知」栏目虽列表+正文公开，但**站点没有按 id 取单篇的公开接口**
+  #    （详情接口全部需登录；article_page 对 id/ids/articleId/... 共 10 组过滤参数穷举均被忽略），
+  #    详情只能固定取「最新一条」，导致所有记录的「正文内容」与附件都指向同一篇
+  #    （实测：2 条记录正文均 319 字、附件均为同一个 19,269,925 字节 docx）。
+  #    标题 / 时间 / 原文链接 / 去重键逐条准确。
+  #    若下游只需要元数据（不要求逐条正文对应），可把本行改成 enabled: true 再启用；
+  #    否则保持停用，避免把重复正文与重复附件灌进生产队列。
+  #    另外：采购公告（6135 条）与采购结果公示（17399 条）列表公开但正文需登录，未配置（见文件头说明）。
+  enabled: false
+  name: 中储粮服务网-重要通知
+  entry_urls:
+    - https://fwgs.sinograin.com.cn/serv/portal-service/api/index/important_notice_page
+
+  schedule:
+    enabled: true
+    interval_seconds: 3600
+
+  limits:
+    max_concurrency: 2
+    request_interval_seconds: 0.5
+
+  request:
+    # 该接口只接受 POST + application/json（框架在 json 存在时自动补 Content-Type）
+    method: POST
+    headers:
+      Accept: application/json, text/plain, */*
+      Referer: https://fwgs.sinograin.com.cn/noticeList
+      Origin: https://fwgs.sinograin.com.cn
+    # 站点前端实际请求体：{"limit":10,"page":1}
+    # 这里 json 只给固定部分，page 由 pagination.mode=json_template 逐页渲染
+    json:
+      limit: 10
+    timeout_seconds: 40
+    retries: 2
+    retry_backoff_seconds: 0.8
+    verify_ssl: false
+
+  pagination:
+    # {page} 为 1 起的页码；站点分页字段名是 page
+    mode: json_template
+    json_template: '{"limit": 10, "page": {page}}'
+    start_page: 1
+    end_page: 3
+
+  crypto:
+    enabled: false
+
+  detail_request:
+    method: POST
+    # 正文与附件来自同一公开接口（站点无按 id 取单篇的公开接口，见文件顶部说明）
+    url: https://fwgs.sinograin.com.cn/serv/portal-service/api/index/important_notice_page
+    body_template: '{"limit": 1, "page": 1}'
+
+  cookie:
+    enabled: false
+
+  dedup:
+    redis_hash_key: zhaobiao:domian:linkqc
+    ttl_days: 30
+    prune_probability: 0.01
+
+  list_extraction:
+    response_html_selectors: []
+    item_selectors:
+      - kind: jsonpath
+        expr: $.data.records[*]
+    link_selectors:
+      - kind: jsonpath
+        expr: $.id
+    title_selectors:
+      - kind: jsonpath
+        expr: $.title
+    # issueTime 是稳定的发布日期（该接口无 publishTime 字段）；日期统一归一化为 YYYY-MM-DD
+    date_selectors:
+      - kind: jsonpath
+        expr: $.issueTime
+    # 人类可读详情页（正文仍从公开接口取，避免只落在 SPA 空壳上）
+    detail_url_template: "/noticeDetail?id={id}"
+    min_title_length: 6
+    fallback_auto: false
+
+  detail_extraction:
+    # 详情响应是 JSON，正文 HTML 在 data.records[0].content 字段
+    response_html_selectors:
+      - kind: jsonpath
+        expr: $.data.records[0].content
+    content_selectors:
+      - kind: xpath
+        expr: //body
+      - kind: xpath
+        expr: //div
+    # 标题不在此处取：详情响应恒为最新一条，取它会把所有记录的标题都变成最新标题。
+    # 置空后框架回退使用列表项的 title（逐条准确）。
+    title_selectors: []
+    # 日期同理不在此处取（见上），回退使用列表项的 issueTime。
+    date_selectors: []
+    fallback_auto: true
+    fallback_readability: false
+    min_content_length: 30
+
+  attachments:
+    # 附件是 OBS 直链，只存在于详情 JSON 的 uploadRelaVOList[*].fileUrl，
+    # **正文 HTML(content) 里没有任何 <a>/href/下载链接**（逐条实测），故只能用 jsonpath 取字段。
+    # 该 URL 的对象名是中文（如 …/附件1：技术规格书和报价表.zip），未编码时 urllib 会抛
+    # "'ascii' codec can't encode characters"；**框架已在附件下载层自动做百分号编码**
+    # （见 attachment_downloader._encode_url），实测可正常下载
+    # （docx 19,269,925B / pdf 100,311B / zip 1,093,328B，magic 均正确）。
+    enabled: true
+    selectors:
+      - kind: jsonpath
+        expr: $.data.records[0].uploadRelaVOList[0:1].fileUrl
+    filename_selectors:
+      - kind: jsonpath
+        expr: $.data.records[0].uploadRelaVOList[0:1].fileName
+    allowed_extensions:
+      - .pdf
+      - .doc
+      - .docx
+      - .xls
+      - .xlsx
+      - .zip
+      - .rar
+      - .txt
+    max_bytes: 52428800
+
+  classification:
+    # 该栏目既有采购/征集类公告（默认 zhaobiao），也有选型结果/分级结果/候选厂商公示等
+    # 结果类公告，用关键词分流到 zhongbiao
+    default_type: zhaobiao
+    zhongbiao_keywords:
+      - 中标
+      - 成交
+      - 结果
+      - 公示
+      - 候选
+      - 废标
+      - 终止
+
+  area_extraction:
+    # 关闭：正文恒为「最新一条」重要通知，其正文中的地名（例如「成都储藏研究院」
+    # 会命中「四川」）与 item 本身无关；启用会把 10 条记录全部错标成同一个省。
+    # 宁可地区留空，也不输出错误地区。
+    enabled: false
+    use_title_first: true
+
+  output:
+    enabled: true
+    queue_zhaobiao: zhaobiao:result:zhaobiao
+    queue_zhongbiao: zhaobiao:result:zhongbiao
+    attachment_dir_zhaobiao: /root/pachong/zhaobiao/data/附件
+    attachment_dir_zhongbiao: /root/pachong/zhaobiao/data_zb/附件

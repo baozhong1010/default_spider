@@ -2,7 +2,7 @@ import logging
 import os
 import re
 import uuid
-from urllib.parse import unquote_to_bytes, urlparse
+from urllib.parse import quote, unquote_to_bytes, urlparse
 
 from spider.config.models import OutputConfig, RequestConfig
 from spider.fetch.http_client import FetchRequest, HttpFetcher
@@ -49,8 +49,8 @@ class AttachmentDownloader(object):
 
         output_files = []
         for i, url in enumerate(attachment_urls):
-            # 源站 href 文件名可能含未编码空格，urllib 会因此失败，统一编码为 %20
-            url = (url or "").replace(" ", "%20")
+            # 源站 href 可能含未编码空格或中文（对象名），urllib 会因此失败，统一做百分号编码
+            url = self._encode_url(url or "")
             name = ""
             if attachment_names and i < len(attachment_names):
                 name = attachment_names[i] or ""
@@ -125,6 +125,22 @@ class AttachmentDownloader(object):
             total_urls=len(attachment_urls),
         )
         return output_files
+
+    @staticmethod
+    def _encode_url(url):
+        # type: (str) -> str
+        """百分号编码 URL 中的空格式/中文等非安全字符。
+
+        保留 URL 结构字符与**已有的 %XX 转义**（safe 里含 %），因此重复调用是幂等的；
+        不做这一步时，含中文对象名（未编码）的附件 URL 会让 urllib 抛
+        `'ascii' codec can't encode characters`。
+        """
+        if not url:
+            return url
+        try:
+            return quote(url, safe=":/?#[]@!$&'()*+,;=%~")
+        except Exception:
+            return url
 
     @staticmethod
     def _looks_like_login_page(response):

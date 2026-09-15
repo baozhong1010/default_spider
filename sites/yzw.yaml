@@ -1,0 +1,218 @@
+# 云筑网（中建集团 · 云筑集采 / 建筑行业物资采购与招标电商平台）
+#   id 前缀：yzw_
+#
+# ============================ 平台识别 ============================
+# https://www.yzw.cn/ 是云筑官网（umi/React SPA 外壳，HTML 仅 ~1.1KB，<div id="root">），
+# meta keywords 自述「云筑官网,物资采购,云筑集采平台,中建电子商务平台」。
+# 云筑网 = 中国建筑集团（CSCEC）的集中采购/招标电商平台，由中建电子商务有限责任公司运营。
+# 官网顶部导航（2026-09 抓包）指向一批业务子站：
+#   云筑集采 jc.yzw.cn / 云筑寻源 xy.yzw.cn / 云筑商城 mro.yzw.cn /
+#   云筑劳务 lw.yzw.cn / 云筑物流 wl.yzw.cn / 云筑数科 sk.yzw.cn / 服务市场 fw.yzw.cn …
+#
+# ============================ 接口分析（CDP 抓包证据） ============================
+# 后端统一走 API 网关 **agw.yzw.cn**（前端 config 里 baseUrl.agw = "//agw.yzw.cn"），
+# 云筑寻源 supplier-sources-web（SPA，壳页 title「云筑寻源」）承载「找商机」栏目。
+#
+# 【公开可抓】招标公告 —— 本配置只用这一个栏目，匿名（无 Cookie）即可全链路取数：
+#   列表：POST https://agw.yzw.cn/api/mtg-core/open/portal/tender/search
+#         body: {"pageNum":N,"pageSize":M,"param":{...过滤项，可省略}}
+#         resp: {code:200,data:{pageNum,pageSize,totalCount,totalPage,records:[{...}]}}
+#         records[] 字段：tenderCode / name / publishDate / endTime / signUpEndDate /
+#                         area / amount / orgCode / tenderCompanyName / tenderCategoryList /
+#                         bidMethod / qualificationType / source / status / tenantId / type
+#         实测（2026-09-15）：pageSize 10/20/50/100 均生效，totalPage 291/146/59/30；
+#                            用同一 index 反复拉取结果稳定（无随机推荐），翻页无重复。
+#   详情：GET  https://agw.yzw.cn/api/mtg-core/open/portal/tender/detail?tenderCode=..&source=..
+#         其中 tenderCode 取列表 item.tenderCode（同时也是人类详情页 /search/sj/bid-detail 的 query 键），
+#         source 取列表 item.source（实测 source=3，缺 source 时服务端 400「参数【source】缺失」）。
+#         resp: {code:200,data:{name,publishDate,tenderCode,source,areaList[],tenderCategoryList[],
+#                               tenderProjectList[],announcementAttachments[],tenderFileAttachments[],
+#                               endTime,signUpEndDate,bidMethod,qualificationType,status,abolished,...}}
+#
+# 【已确认受阻（未配置）——见文末「阻断项」】
+#
+# ============================ 抓取要点 / 坑 ============================
+# 1) SPA 页面本身匿名打不开：/search/sj/bid、/search/sj/win-bid 等路由的壳页 302，
+#    客户端再跳 ucenter.yzw.cn/login（CDP 渲染确认落地 URL 为登录页，body 只有「扫码登录」）。
+#    但列表/详情**接口**匿名可用（不带 Cookie 直接 POST/GET 即 200），
+#    与既有 wisdombidding「登录墙页面背后的匿名 AJAX 接口」同类，故直接对接接口。
+#    因此 entry_urls 必须是接口地址，request.method 必须是 POST。
+# 2) 列表必须 POST + JSON body，分页字段叫 **pageNum**（不是 page/pageNo）；
+#    用 json_template 整包渲染（param 是嵌套对象，page_param 无法改嵌套字段）。
+#    param 传 null 字段时 totalCount=2787，完全不传 param 时 totalCount=2901
+#    （接口对未登录/无过滤的请求会带上少量「推荐位」），两者首/次/三页记录完全一致，
+#    这里选择与前端一致的 null param 形态。
+# 3) 详情响应是纯 JSON、**没有正文 HTML 字段**（不像 zcygov/cg95306 有 content/infoContent）。
+#    站点把正文渲染成前端组件（取数走 /portal/tender/detail，匿名 401）；
+#    公开侧只能拿到结构化字段：公告名称、采购类型、招标方式、资质要求、覆盖地区、标的类别、
+#    发布时间、报名/报价/投标截止、关联项目等（对前 400 条公开记录逐一拉详情，字段结构一致）。
+#    好在**该接口返回的 JSON 是带换行 + 2 空格缩进的美化格式**（实测 678 字节 / 34 个换行），
+#    所以 detail_extraction.content_selectors 用一条 regex 把 data 段整段取出来当正文：
+#    既不伪造内容（字段/时间/编号都是站点原值）、又带缩进可读、中文也不会变 \uXXXX。
+#    （试过但不可行：① body_template 会被框架 json.loads，失败即 raise，且会把详情方法强制成 POST；
+#      ② jsonpath 取 $.data 得到的是 Python dict repr（单引号 + False/True），比 JSON 原文更难看。）
+# 4) 公开 `open/portal/*` 接口只对 tender 开；inquiry / recruit / winner 一律 401。
+# 5) 附件：详情 JSON 里的 announcementAttachments / tenderFileAttachments 是**空数组**
+#    （对前 400 条公开记录逐一拉详情统计：公告附件 0 条、招标文件附件 0 条有值；
+#     tenderProjectList 318 条有值、tenderEndDate 80 条有值）。
+#    即公开侧本来就不下发附件（附件下载在登录态）。选择器按要求写好保留（一旦站点补数据自动产出），
+#    下载地址形如 /api/fss/... 无固定扩展名，故 allowed_extensions 留空。
+# 6) 站点对匿名接口未观察到明显风控（300+ 次请求无 412/拦截），但仍按 0.5s 间隔限速。
+# 7) **框架验证出来的两个坑（首轮测试 50/50 全失败的原因）**：
+#    a. detail_request.url_template 只认 {value}/{link}/{title}，且三者的取值都是**列表 link 原值**
+#       （本例 = tenderCode）。用 {tenderCode}/{source} 这类任意 item 字段名时占位符原样保留 → 服务端 400；
+#       用 {value} 则把 tenderCode 当 URL → urllib 报 unknown url type。
+#    b. 正确做法：把详情接口地址整体写进 list_extraction.detail_url_template（那里支持任意 item 字段，
+#       实测 {tenderCode}/{source} 正常），detail_request 侧不配 url_template，
+#       框架回退用 item.url 请求详情。
+#    （原文链接因此落成 API 地址；人类可读的 /search/sj/bid-detail 匿名 302 到登录页，二者只能取一。）
+
+- id: yzw_jcgg
+  enabled: true
+  name: 云筑网（中建云筑集采）-招标公告
+  entry_urls:
+    - https://agw.yzw.cn/api/mtg-core/open/portal/tender/search
+
+  schedule:
+    enabled: true
+    interval_seconds: 3600
+
+  limits:
+    max_concurrency: 3
+    request_interval_seconds: 0.5
+
+  request:
+    method: POST
+    headers:
+      Content-Type: application/json;charset=UTF-8
+      Accept: application/json, text/plain, */*
+      Origin: https://xy.yzw.cn
+      Referer: https://xy.yzw.cn/search/sj/bid
+    params: {}
+    timeout_seconds: 40
+    retries: 2
+    retry_backoff_seconds: 0.8
+    verify_ssl: false
+
+  pagination:
+    # 分页字段是 pageNum，且要与嵌套 param 一起 POST，故整包渲染 JSON 模板
+    mode: json_template
+    start_page: 1
+    end_page: 3
+    json_template: '{"pageNum":{page},"pageSize":50,"param":{"areaCodeList":[],"categoryTypeCodeList":[],"publishDateStart":null,"publishDateEnd":null,"keyword":null}}'
+
+  crypto:
+    enabled: false
+
+  detail_request:
+    method: GET
+    # 不配 url_template：此时框架直接用列表项 item.url 作为详情地址（engine: 无模板 → detail_url = item.url），
+    # item.url 由 list_extraction.detail_url_template 拼成带 tenderCode + source 的公开详情接口地址。
+    # （detail_request.url_template 只有 {value}/{link}/{title}，且它们都等于列表 link 原值 = tenderCode，
+    #   用它反而会把 tenderCode 当成 URL 去请求，报 unknown url type。）
+    # 另：本站**不能**用 detail_request.body_template——框架把它的渲染结果优先当正文，但会先
+    # json.loads 失败后 raise（engine 里未捕获），且设了 body_template 会把详情方法强制成 POST。
+
+  cookie:
+    enabled: false
+
+  dedup:
+    redis_hash_key: zhaobiao:domian:linkqc
+    ttl_days: 30
+    prune_probability: 0.01
+
+  list_extraction:
+    response_html_selectors: []
+    item_selectors:
+      - kind: jsonpath
+        expr: $.data.records[*]
+    link_selectors:
+      - kind: jsonpath
+        expr: $.tenderCode
+    title_selectors:
+      - kind: jsonpath
+        expr: $.name
+    date_selectors:
+      - kind: jsonpath
+        expr: $.publishDate
+    # 列表自带 area（如「广东省东莞市」「全国」或「福建省,广东省,…」），优先于标题启发式
+    area_selectors:
+      - kind: jsonpath
+        expr: $.area
+    # 「原文链接 / 详情地址」= 公开详情接口地址（带 tenderCode + source，detail_url_template 支持任意 item 字段）。
+    # 取舍说明：人类可读的 /search/sj/bid-detail 页匿名会 302 到 ucenter 登录页、抓不到正文，
+    # 而详情接口必须同时带 tenderCode 与 source，框架另一条路（detail_request.url_template）又只能引用
+    # 列表 link 原值，故只能二选一；这里优先保证正文可取，
+    # 与既有 sites/zcygov.yaml 竞价站「原文链接落 API 地址」是同一处理方式。
+    detail_url_template: "https://agw.yzw.cn/api/mtg-core/open/portal/tender/detail?tenderCode={tenderCode}&source={source}"
+    min_title_length: 5
+    fallback_auto: false
+
+  detail_extraction:
+    # 详情是纯 JSON、无正文字段。站点返回的 JSON 是**带换行与 2 空格缩进**的美化格式
+    # （实测 678 字节 / 34 个换行），所以用 regex 把 data 段整段取出来当正文，
+    # 既不伪造内容、又天然带缩进可读（比 jsonpath 取 dict 更干净：后者会得到 Python
+    # 单引号 + </br> 的 dict repr）。
+    response_html_selectors: []
+    content_selectors:
+      - kind: regex
+        expr: '"data"\s*:\s*(\{[\s\S]*?\})\s*,?\s*"success"'
+    title_selectors:
+      - kind: jsonpath
+        expr: $.data.name
+    date_selectors:
+      - kind: jsonpath
+        expr: $.data.publishDate
+    # 正文取到的是 JSON 文本（没有 <a> 可误抓），兜底解析只会引入噪音，全部关闭
+    fallback_auto: false
+    fallback_readability: false
+    # 公开详情 JSON 美文长度 600~1200 字节，这里守住底线即可
+    min_content_length: 30
+
+  attachments:
+    enabled: true
+    # 公开详情接口的这两个数组目前恒为空（400 条样本统计为 0）；
+    # 选择器保留，站点一旦对公开公告下发附件即可自动产出。
+    selectors:
+      - kind: jsonpath
+        expr: $.data.announcementAttachments[*].fileUrl
+      - kind: jsonpath
+        expr: $.data.tenderFileAttachments[*].fileUrl
+    filename_selectors:
+      - kind: jsonpath
+        expr: $.data.announcementAttachments[*].fileName
+      - kind: jsonpath
+        expr: $.data.tenderFileAttachments[*].fileName
+    # 云筑文件服务地址形如 /api/fss/...（无稳定扩展名）→ 不做扩展名过滤
+    allowed_extensions: []
+    max_bytes: 52428800
+
+  classification:
+    # 该接口即「公开招标公告」栏目，固定按招标类归档，不做关键词二次判定
+    default_type: zhaobiao
+    zhongbiao_keywords: []
+
+  area_extraction:
+    enabled: true
+    use_title_first: true
+
+  output:
+    enabled: true
+    queue_zhaobiao: zhaobiao:result:zhaobiao
+    queue_zhongbiao: zhaobiao:result:zhongbiao
+    attachment_dir_zhaobiao: /root/pachong/zhaobiao/data/附件
+    attachment_dir_zhongbiao: /root/pachong/zhaobiao/data_zb/附件
+
+# ============================ 阻断项（未配置栏目） ============================
+# 以下栏目本次均实测匿名 401，故**没有**写进配置（避免产出空正文/伪造记录）：
+#   中标公告   POST /api/mtg-core/portal/tender/pageWinners                → 401
+#   中标查询   POST /api/mtg-core/busOpp/tender/winner/search              → 401
+#   询价公告   POST /api/mtg-core/portal/inquiry/search                    → 401
+#   询价详情   GET  /api/mtg-core/sup/inquiry/quote/getInquiry/{code}      → 401
+#   招募公告   POST /api/mtg-core/purchasePlan/supplier/portal/search      → 401
+#   公开招标   POST /api/mtg-core/portal/tender/search                     → 401
+#   招募详情   GET  /api/mtg-core/mtg/recruit/getShareInfo/{code}          → 401
+#   （401 响应体统一为 {"code":401,"message":"请先完成登录，再继续操作！"}）
+# 另有两个「匿名 200 但非分页列表」的推荐位接口，**不适合做抓取源**（无分页、恒返回 10 条）：
+#   GET /api/mtg-core/mtg/common/publicTenderForSupplier   （pageNum/pageSize 无效）
+#   GET /api/mtg-core/mtg/common/publicInquiryForSupplier  （同上，字段为询价单结构）
