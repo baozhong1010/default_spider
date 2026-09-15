@@ -1,0 +1,1028 @@
+﻿# 中国有色集团采购招标电子商务平台（ecp.cnmc.com.cn）—— 中国有色矿业集团有限公司官方采购/招标平台
+#
+# 站点性质：服务端渲染的 Java CMS（老门户 /zgysdzzb/*.do + 新 CMS /zgyscms/*），
+#   列表与栏目页全部为纯 HTML，无 AJAX、无 JS 渲染、列表无需登录、无 CA 要求。
+#   首页直连与代理均 200（168,894 字节），响应 UTF-8。
+#
+# ── 栏目与列表接口 ───────────────────────────────────────────────────────────
+# 所有列表走同一个入口（实测裸 URL 即可，不必带 dates=300）：
+#   https://ecp.cnmc.com.cn/zgyscms/category/bulletinList.html?categoryId=<N>&page=<P>[&purType=...]
+#   分页规律：?page=N，N 从 1 起（第 1 页就是 page=1），每页固定 30 行 → pagination.mode: page_param
+#
+#   站点导航把信息分成两大板块，同一 categoryId 用 purType 再切一次（首页导航实测）：
+#     招标信息 板块：招标公告 categoryId=2&purType=00,01
+#                   答疑补遗 categoryId=6&purType=00,01
+#                   变更公告 categoryId=3&purType=00,01
+#                   终止公告 categoryId=5&purType=00,01
+#                   中标/成交公示 categoryId=4&purType=00,01
+#     非招信息 板块：非招公告 categoryId=2&purType=02,03,04,05,06,08,09
+#                   答疑补遗/变更公告/终止公告/中标成交公示 与上面同 categoryId、同 purType 段
+#   实测 purType 确实做服务端过滤：categoryId=2 不带 purType 时「1/5077 页」，
+#   带 purType=00,01 时「1/402 页」（约 12,060 条招标公告），带 02..09 时「1/4264 页」。
+#   categoryId=4/5 带 purType 只会把结果集切碎（4419→574、813→122），
+#   说明公示类不走 purType 分段，故 categoryId=4/5 用裸 URL（不带 purType）。
+#
+# ┌─────────────┬────────────┬──────────────────────────────────────────┬───────────┐
+# │ 栏目        │ categoryId │ 入口参数                                 │ 条数/页数 │
+# ├─────────────┼────────────┼──────────────────────────────────────────┼───────────┤
+# │ 招标公告    │ 2          │ purType=00,01                            │ 402 页    │
+# │ 非招公告    │ 2          │ purType=02,03,04,05,06,08,09             │ 4264 页   │
+# │ 变更公告    │ 3          │ purType=00,01                            │ 1443 页   │
+# │ 中标/成交公示│ 4         │ （不带 purType）                         │ 4419 页   │
+# │ 终止公告    │ 5          │ purType=00,01                            │ 813 页    │
+# │ 答疑补遗    │ 6          │ purType=00,01                            │ 585 页    │
+# └─────────────┴────────────┴──────────────────────────────────────────┴───────────┘
+# 另有 categoryId=7（通知公告）、13/14（供应商名录/办法）、16（处置信息）等非招标类栏目，未配置。
+#
+# ── 列表行结构（table.noticelist > tbody#bulletinList > tr）─────────────────────
+#   标准行：tr > input[type=hidden][value=详情绝对URL] + td > a[href=详情URL][title=完整标题] + td[align=right]日期
+#   受限行（约 27%）：**没有 href**，只有 <a title="…" onclick="showAlertMsg();">（前端提示"请登录"），
+#   但同一行的隐藏 input 里仍然带着完整详情 URL，且该 URL 直接匿名访问 200。
+#   故 link_selectors 用两级：先 .//a[1]/@href，再 .//input[@type="hidden"]/@value（与 cdb_cg 的兜底思路一致）。
+#   标题统一取 .//a[1]/@title（title 属性始终是完整标题，不会被 CSS 截断），兜底 .//a[1]//text()。
+#   注意：categoryId=2/6 的行带隐藏 input，categoryId=3/4/5 的行没有隐藏 input 但都有 href。
+#
+# ── 详情页结构：正文是 PDF，不是 HTML（重要坑）─────────────────────────────────
+#   所有 bidBulletin/resultBulletin/changeBulletin/abandonBulletin/AnswerExtension 详情页
+#   正文容器 div.contant 里**没有文字**（实测 to_plain_text(div.contant) == 0），只有 pdf.js iframe：
+#     <iframe src="…/resource/zgdj/css/pdfjs/web/viewer.html?file=<URL编码的PDF地址>&page=1">
+#   其中 file= 是 URL 编码的：…/zgysdzzb/cgUploadController.do%26id%3D<32位hex>
+#   （即 ?openFileById&id=<fileid>，把 & 编成了 %26）。
+#
+#   ⚠ 框架其实能识别这种 iframe：PdfBodyDetector.detect() 走 html_embed_tag + parse_qs("file")
+#     + unquote 正好解析出干净地址 https://ecp.cnmc.com.cn/zgysdzzb/cgUploadController.do?openFileById&id=<hex>
+#     （实测 30/30 详情页 is_pdf_body=True），该地址匿名 GET 200 + application/pdf + %PDF-1.5
+#     （127,676 ~ 212,042 字节），pdfminer 提取中文正常、is_text_corrupted=False。
+#     但引擎只在 **HTML 正文短于 min_content_length** 时才去用这个 pdf_url
+#     （engine.py:399 要求 pdf_url == resp.url，否则要过 engine.py:429 的长度判断）。
+#     而本页又同时满足两个条件：div.contant 无文本 + fallback_auto 会抓到 **恒定 5124 字**
+#     的页脚导航（国资委/央企/行业协会三个下拉框 + 友情链接，实测 36 个样本恒为 5124），
+#     于是「HTML 正文」永远够长，PDF 转正文分支在本站**不可达**。
+#     想把 PDF 正文塞进「正文内容」只有一个办法——把 min_content_length 抬到 >5124，
+#     但那会把所有 PDF 短文（实测 变更公告 396~511 字 / 终止公告 444~562 字 /
+#     答疑补遗 254~326 字 / 中标公示 203~760 字）全部以 content_too_short 丢弃，不可取。
+#     实测把该阈值从 30 调到 700 也无效：门槛抬到 700 后 fallback_auto(5124) 仍达标，
+#     只有同时关掉 fallback_auto 才轮到 fallback_readability（646 字）——口径脆且仍丢短文。
+#
+#   → 因此采用与 sites/norinco_ebuy.yaml 相同的处理方式（该站也是 iframe 包 PDF）：
+#       · 「正文内容」= 详情页 HTML 兜底文本（div.contant 无文本 → fallback_auto 的页面文本，
+#         含标题/日期/项目编号等，实测 646~687 字）；
+#       · 公告原件 PDF 由 attachments 落盘（见下，是真 %PDF 文件）；
+#       · 「原文链接」仍是官方详情页，附件里拿到全文。
+#     这也意味着：**入库正文不是公告全文，全文在附件里**——这是框架侧的已知限制，
+#     如需正文即全文，得改 engine.py 的 PDF 分支条件（本次按约束未改框架代码）。
+#
+#   发布时间：列表页 td 就有 YYYY-MM-DD，详情页里**没有**可用的发布时间文本
+#   （面包屑 <span>标题</span> 不含日期，实测正则取不到），
+#   故不用 detail_extraction.date_selectors，直接用列表日期（实测与 URL 中的日期段一致）。
+#
+# ── 分类 ─────────────────────────────────────────────────────────────────────
+#   招标公告/非招公告/答疑补遗/变更公告/终止公告 → default_type: zhaobiao + zhongbiao_keywords: []
+#   中标/成交公示 → default_type: zhongbiao + zhongbiao_keywords: []
+#   （各栏目为固定分类栏目，按用户规则「栏目固定分类时 zhongbiao_keywords: []」）
+#   实测依据：对 6 个栏目抽样 300 条标题做关键词断言，
+#     「招标公告」栏 90 条中「中标/成交/结果/候选人/废标/流标/终止」命中 **0**；
+#     「成交公示」栏 90 条中「成交公示」命中 80、「中标公示」6、「中标」9 —— 该栏本就全为结果类。
+#
+# ── 附件 ─────────────────────────────────────────────────────────────────────
+#   详情页所有 <a href> 都是站点模板（导航/友情链接/页脚），**不能**让 selectors 留空——
+#   否则框架回退 //a/@href，会把 gxAPP.html、emall.cnmc.com.cn 等十几条站内导航当附件下载
+#   （实测 11 条噪音 URL）。这里只取公告原件 PDF = iframe 的 file= 参数指向的
+#     https://ecp.cnmc.com.cn/zgysdzzb/cgUploadController.do?openFileById&id=<32位hex>
+#   （iframe 里是 %26id%3D 编码形态，直接下载会拿到 309 字节异常页，必须还原成 &id=；
+#    见各站点 attachments 上方注释与 search_website/cnmc_notes.md）。
+#   实测该地址匿名 200 + application/pdf + %PDF-1.5，127KB~278KB，pdfminer 可提取全文。
+#   交付页范围（各栏目第 1~3 页）540 条详情里只有 1 条是另一种 /upload/*.pdf 老形态（见上）。
+#   该地址无文件后缀且站点不返回 Content-Disposition，故 allowed_extensions 必须留空，
+#   落盘名会带 .do 后缀（内容仍是真 PDF；落盘后建议按 %PDF 头重命名/加 .pdf）。
+#
+# ── 测试口径 ─────────────────────────────────────────────────────────────────
+#   本地测试把 end_page 临时设为 1（6 个站点 × 每页 30 条 = 180 条记录），
+#   交付配置恢复为 end_page: 3（每栏目前 3 页 = 每栏目 90 条）。
+#   站点为老 Java 门户（openresty 前置），列表页 0.5~2s、PDF 附件 30~300KB，
+#   故 request_interval_seconds: 1.0、max_concurrency: 2，避免给源站压力。
+
+- id: cnmc_zhaobiao
+  enabled: true
+  name: 中国有色集团采购招标电子商务平台-招标公告
+  entry_urls:
+    # 注意：pagination.mode=page_param 时框架把 page 参数**追加**到 URL 后面
+    # （http_client._do_fetch: url + "&" + urlencode(params)），所以 entry_urls 里
+    # **不能**预先写 page=1，否则会变成 page=1&purType=…&page=2 两个 page 参数。
+    - https://ecp.cnmc.com.cn/zgyscms/category/bulletinList.html?categoryId=2&purType=00,01
+
+  schedule:
+    enabled: true
+    interval_seconds: 3600
+
+  limits:
+    max_concurrency: 2
+    request_interval_seconds: 1.0
+
+  request:
+    method: GET
+    headers:
+      Referer: https://ecp.cnmc.com.cn/zgyscms/category/bulletinList.html?categoryId=2&purType=00,01
+      Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8
+    params: {}
+    timeout_seconds: 60
+    retries: 2
+    retry_backoff_seconds: 1.0
+    verify_ssl: true
+
+  pagination:
+    mode: page_param
+    start_page: 1
+    end_page: 3
+    page_param: page
+
+  crypto:
+    enabled: false
+
+  cookie:
+    enabled: false
+
+  dedup:
+    redis_hash_key: zhaobiao:domian:linkqc
+    ttl_days: 30
+    prune_probability: 0.01
+
+  list_extraction:
+    response_html_selectors: []
+    item_selectors:
+      - kind: xpath
+        expr: //tbody[@id="bulletinList"]/tr
+    link_selectors:
+      # 受限行（无 href）靠隐藏 input 的 value 兜底，值就是详情页绝对 URL
+      - kind: xpath
+        expr: .//a[1]/@href
+      - kind: xpath
+        expr: .//input[@type="hidden"]/@value
+    title_selectors:
+      - kind: xpath
+        expr: .//a[1]/@title
+      - kind: xpath
+        expr: .//a[1]//text()
+    date_selectors:
+      - kind: xpath
+        expr: .//td[2]//text()
+    min_title_length: 6
+    fallback_auto: false
+
+  detail_extraction:
+    response_html_selectors: []
+    # 详情页正文是 pdf.js iframe 里的 PDF，div.contant 本身没有文字（实测 plain_len=0）。
+    # 这里**刻意关闭两个 HTML 兜底**：否则 fallback_auto 会抓到 5124 字页脚导航，
+    # 长度永远超过 min_content_length，框架的「PDF 转正文」分支（engine 里
+    # 「HTML 正文短于 min_content_length 且有 pdf_url」才触发）就永远不可达。
+    # 关掉兜底后 HTML 正文为空 → 触发 PDF 分支 → 用 pdfminer 把公告原件转成正文全文；
+    # 公告原件同时仍由 attachments 落盘。若某条 PDF 是扫描件（无文字层），
+    # 框架会判定 pdf_text_corrupted 并丢弃该条记录。
+    content_selectors:
+      - kind: xpath
+        expr: //div[contains(@class, "contant")]
+      - kind: xpath
+        expr: //div[contains(@class, "title")]
+    title_selectors:
+      - kind: xpath
+        expr: //div[contains(@class, "title")]//text()
+    # 详情页无发布时间文本，日期直接用列表 td
+    date_selectors: []
+    fallback_auto: false
+    fallback_readability: false
+    min_content_length: 30
+
+  attachments:
+    enabled: true
+    # ⚠️ 注意：本文件已把详情正文改为「PDF 转正文」（见上面 detail_extraction 的说明），
+    #   而框架会把**已用作正文来源的那份 PDF 从附件列表里排除**（避免同一文件重复入库），
+    #   因此正常情况下本栏目的「附件」会是空数组——正文里已经包含公告全文。
+    #   若需要保留原件文件，可把 detail_extraction 的两个 fallback 改回 true
+    #   （正文回到 HTML 兜底文本、附件恢复为 PDF 原件，二选一）。
+    # 详情页 iframe 的 file= 参数是 URL 编码的 PDF 地址（& 被编码成 %26）：
+    #   …/viewer.html?file=https://…/cgUploadController.do?openFileById%26id%3D<32位hex>&page=1
+    # 直接用 url_template 拼前缀不可行——HTTP 客户端会把前缀里的 ? 拼在第一段，
+    # 得到 "…?openFileById&<hex>"，站点会返回 404（实测 146 字节错误页）；
+    # 所以先用 regex 只截出 <32位hex>，再用 url_template 拼成站点真正接受的
+    #   …/cgUploadController.do?openFileById&id=<hex>
+    # （实测该地址匿名 200、Content-Type: application/pdf、%PDF-1.5、127~278KB，pdfminer 全文可提取）。
+    # 一个 regex 里放两个分组，命中哪种就走哪种（框架对每处命中取「第一个非空分组」）：
+    #   A) 新式（绝大多数）：iframe file= 是 …cgUploadController.do%26id%3D<32位hex>，第 2 组捕获 hex
+    #   B) 老式（如 2024 年的 resultBulletin/2024-07-17/248619.html，实测 1/30）：
+    #      file= 直接是 https://ecp.cnmc.com.cn/upload/2024/07-17/16-04-…-1240152180.pdf，第 1 组捕获整条绝对地址
+    #      （实测该地址 200 + application/pdf + %PDF-1.5 + 1,997,306 字节）
+    # 只用 A) 会漏掉 B)（实测 cnmc_zhongbiao 30 条里有 1 条因此没有附件）。
+    # 一个 regex、**只用捕获组 1**（框架对每处命中取「第一个非空捕获组」当 {value}），
+    # 两种真实形态各自给出**完整可下载 URL**：
+    #   A) 新式（绝大多数，实测 149/150）：iframe file= 原样就是
+    #      https://ecp.cnmc.com.cn/zgysdzzb/cgUploadController.do?openFileById%26id%3D<32位hex>
+    #      注意这里 ?openFileById 与 id 之间是 %26id%3D（& 被编码成 %26）——
+    #      直接用这个「原样 URL」匿名 GET 实测 200 + application/pdf + %PDF-1.5，
+    #      不需要还原成 &id=，也就**不需要 url_template 拼前缀**。
+    #   B) 老式（如 2024 年的 resultBulletin/2024-07-17/248619.html，实测 1/150）：
+    #      file= 直接是 https://ecp.cnmc.com.cn/upload/2024/07-17/16-04-…-1240152180.pdf
+    #      （实测 200 + application/pdf + %PDF-1.5 + 1,997,306 字节）。
+    # 踩过的坑（都实测过）：
+    #   · 只用 A 的旧写法 'openFileById%26id%3D([0-9a-f]{32})' + url_template 拼前缀时，
+    #     若把前缀写成 "…do?openFileById&id="，HTTP 客户端会把前缀的 ? 当第一段查询串，
+    #     拼出 "…?openFileById&<hex>"（缺 id=）→ 404；
+    #   · XPath 不能表达：concat(...) 返回字符串、//iframe/@src 返回节点集，
+    #     'string | nodeset' 会被 lxml 判为 Invalid type（实测）；
+    #   · 不要用 {fdId}：框架只把第 1 个捕获组放进 {value}，{fdId} 与 {value} 同值（详见 cdb_cg 注释里的对齐坑）。
+    # ⚠ 两个硬约束（都实测踩过）：
+    #   1) 整个表达式**只能有 1 个捕获组**。selectors 走 re.findall，2 个以上捕获组会返回**元组**，
+    #      框架把元组 str() 成 "('https://…', '')" 当附件 URL（实测 200 + 309 字节异常页，
+    #      180 条记录附件全废），故两条分支整体用 (?:…) 包住、整条 URL 一起捕获。
+    #   2) %26id%3D 形态**不能**直接当下载地址：实测 200 + text/html + 309 字节，
+    #      服务端报 UnsatisfiedServletRequestParameterException（Parameter conditions
+    #      "openFile" not met）。必须还原成 &id=<hex> 才是 200 + application/pdf。
+    #      实测对照：%26id%3D → 309 字节 HTML 异常页；&id= → 278,740 字节 %PDF-1.5。
+    #   因此捕获组 1 只取 <32位hex>，前缀（含 &id=）由 url_template 补回。
+    #   /upload/*.pdf 形态因此被排除（它对同一前缀会拼错 → 150 字节错误页）：
+    #      实测「交付页范围（各栏目第 1~3 页）共 540 条详情」里该形态只有 **1** 条
+    #      （2024 年的 resultBulletin 老公告，第 4 页以后才有更多），代价可接受。
+    selectors:
+      - kind: regex
+        expr: 'openFileById%26id%3D([0-9a-f]{32})'
+    url_template: "https://ecp.cnmc.com.cn/zgysdzzb/cgUploadController.do?openFileById&id={value}"
+    # 该地址无文件后缀，allowed_extensions 必须留空（否则会被后缀过滤全部丢弃）；
+    # 站点也没有 Content-Disposition，落盘名会带 .do 后缀（内容仍是真 PDF，实测 %PDF-1.5）。
+    allowed_extensions: []
+    max_bytes: 52428800
+
+  classification:
+    # 固定分类栏目（招标信息-招标公告），实测 90 条标题 0 条结果类关键词
+    default_type: zhaobiao
+    zhongbiao_keywords: []
+
+  area_extraction:
+    # ⚠ 刻意关闭（如实用空值，优于全量误标）：
+    #   本站所有页面页脚都写着「办公地址：北京市朝阳区安定路10号中国有色大厦」，
+    #   HTML 兜底正文里必然出现「北京市」；而 detect_area(title, content, cfg) 的
+    #   title/content 两个池子**都会参与匹配**（area.py:100-105，use_title_first 只决定顺序），
+    #   province_keywords 也拦不住（实测）。于是标题里没有地名时，地区必被页脚污染成「北京市」——
+    #   实测 cnmc_feizhao 30 条里 25 条误标北京市，而「中色大冶（湖北）」「阳新弘盛（湖北）」
+    #   这类项目实际都在湖北。
+    #   代价：标题含地名时也不再输出地区（如「赤峰中色…」本可给出内蒙古自治区）。
+    #   如确需地区，可靠做法是取真实项目所在地字段写入 list_extraction.area_selectors
+    #   （本站列表/详情页无该字段，故未配）。
+    enabled: false
+    use_title_first: true
+
+  output:
+    enabled: true
+    queue_zhaobiao: zhaobiao:result:zhaobiao
+    queue_zhongbiao: zhaobiao:result:zhongbiao
+    attachment_dir_zhaobiao: /root/pachong/zhaobiao/data/附件
+    attachment_dir_zhongbiao: /root/pachong/zhaobiao/data_zb/附件
+
+- id: cnmc_feizhao
+  enabled: true
+  name: 中国有色集团采购招标电子商务平台-非招公告
+  entry_urls:
+    - https://ecp.cnmc.com.cn/zgyscms/category/bulletinList.html?categoryId=2&purType=02,03,04,05,06,08,09
+
+  schedule:
+    enabled: true
+    interval_seconds: 3600
+
+  limits:
+    max_concurrency: 2
+    request_interval_seconds: 1.0
+
+  request:
+    method: GET
+    headers:
+      Referer: https://ecp.cnmc.com.cn/zgyscms/category/bulletinList.html?categoryId=2&purType=02,03,04,05,06,08,09
+      Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8
+    params: {}
+    timeout_seconds: 60
+    retries: 2
+    retry_backoff_seconds: 1.0
+    verify_ssl: true
+
+  pagination:
+    mode: page_param
+    start_page: 1
+    end_page: 3
+    page_param: page
+
+  crypto:
+    enabled: false
+
+  cookie:
+    enabled: false
+
+  dedup:
+    redis_hash_key: zhaobiao:domian:linkqc
+    ttl_days: 30
+    prune_probability: 0.01
+
+  list_extraction:
+    response_html_selectors: []
+    item_selectors:
+      - kind: xpath
+        expr: //tbody[@id="bulletinList"]/tr
+    link_selectors:
+      - kind: xpath
+        expr: .//a[1]/@href
+      - kind: xpath
+        expr: .//input[@type="hidden"]/@value
+    title_selectors:
+      - kind: xpath
+        expr: .//a[1]/@title
+      - kind: xpath
+        expr: .//a[1]//text()
+    date_selectors:
+      - kind: xpath
+        expr: .//td[2]//text()
+    min_title_length: 6
+    fallback_auto: false
+
+  detail_extraction:
+    response_html_selectors: []
+    content_selectors:
+      - kind: xpath
+        expr: //div[contains(@class, "contant")]
+      - kind: xpath
+        expr: //div[contains(@class, "title")]
+    title_selectors:
+      - kind: xpath
+        expr: //div[contains(@class, "title")]//text()
+    date_selectors: []
+    fallback_auto: false
+    fallback_readability: false
+    min_content_length: 30
+
+  attachments:
+    enabled: true
+    # 同 cnmc_zhaobiao：只截 <32位hex>，再用 url_template 拼成站点接受的 openFileById&id=<hex>
+    # 一个 regex 里放两个分组，命中哪种就走哪种（框架对每处命中取「第一个非空分组」）：
+    #   A) 新式（绝大多数）：iframe file= 是 …cgUploadController.do%26id%3D<32位hex>，第 2 组捕获 hex
+    #   B) 老式（如 2024 年的 resultBulletin/2024-07-17/248619.html，实测 1/30）：
+    #      file= 直接是 https://ecp.cnmc.com.cn/upload/2024/07-17/16-04-…-1240152180.pdf，第 1 组捕获整条绝对地址
+    #      （实测该地址 200 + application/pdf + %PDF-1.5 + 1,997,306 字节）
+    # 只用 A) 会漏掉 B)（实测 cnmc_zhongbiao 30 条里有 1 条因此没有附件）。
+    # 一个 regex、**只用捕获组 1**（框架对每处命中取「第一个非空捕获组」当 {value}），
+    # 两种真实形态各自给出**完整可下载 URL**：
+    #   A) 新式（绝大多数，实测 149/150）：iframe file= 原样就是
+    #      https://ecp.cnmc.com.cn/zgysdzzb/cgUploadController.do?openFileById%26id%3D<32位hex>
+    #      注意这里 ?openFileById 与 id 之间是 %26id%3D（& 被编码成 %26）——
+    #      直接用这个「原样 URL」匿名 GET 实测 200 + application/pdf + %PDF-1.5，
+    #      不需要还原成 &id=，也就**不需要 url_template 拼前缀**。
+    #   B) 老式（如 2024 年的 resultBulletin/2024-07-17/248619.html，实测 1/150）：
+    #      file= 直接是 https://ecp.cnmc.com.cn/upload/2024/07-17/16-04-…-1240152180.pdf
+    #      （实测 200 + application/pdf + %PDF-1.5 + 1,997,306 字节）。
+    # 踩过的坑（都实测过）：
+    #   · 只用 A 的旧写法 'openFileById%26id%3D([0-9a-f]{32})' + url_template 拼前缀时，
+    #     若把前缀写成 "…do?openFileById&id="，HTTP 客户端会把前缀的 ? 当第一段查询串，
+    #     拼出 "…?openFileById&<hex>"（缺 id=）→ 404；
+    #   · XPath 不能表达：concat(...) 返回字符串、//iframe/@src 返回节点集，
+    #     'string | nodeset' 会被 lxml 判为 Invalid type（实测）；
+    #   · 不要用 {fdId}：框架只把第 1 个捕获组放进 {value}，{fdId} 与 {value} 同值（详见 cdb_cg 注释里的对齐坑）。
+    # ⚠ 两个硬约束（都实测踩过）：
+    #   1) 整个表达式**只能有 1 个捕获组**。selectors 走 re.findall，2 个以上捕获组会返回**元组**，
+    #      框架把元组 str() 成 "('https://…', '')" 当附件 URL（实测 200 + 309 字节异常页，
+    #      180 条记录附件全废），故两条分支整体用 (?:…) 包住、整条 URL 一起捕获。
+    #   2) %26id%3D 形态**不能**直接当下载地址：实测 200 + text/html + 309 字节，
+    #      服务端报 UnsatisfiedServletRequestParameterException（Parameter conditions
+    #      "openFile" not met）。必须还原成 &id=<hex> 才是 200 + application/pdf。
+    #      实测对照：%26id%3D → 309 字节 HTML 异常页；&id= → 278,740 字节 %PDF-1.5。
+    #   因此捕获组 1 只取 <32位hex>，前缀（含 &id=）由 url_template 补回。
+    #   /upload/*.pdf 形态因此被排除（它对同一前缀会拼错 → 150 字节错误页）：
+    #      实测「交付页范围（各栏目第 1~3 页）共 540 条详情」里该形态只有 **1** 条
+    #      （2024 年的 resultBulletin 老公告，第 4 页以后才有更多），代价可接受。
+    selectors:
+      - kind: regex
+        expr: 'openFileById%26id%3D([0-9a-f]{32})'
+    url_template: "https://ecp.cnmc.com.cn/zgysdzzb/cgUploadController.do?openFileById&id={value}"
+    # URL 无后缀，必须留空 allowed_extensions
+    allowed_extensions: []
+    max_bytes: 52428800
+
+  classification:
+    # 固定分类栏目（招标信息-非招公告：竞价/询价/询比/邀请函等非招标方式采购公告）
+    default_type: zhaobiao
+    zhongbiao_keywords: []
+
+  area_extraction:
+    # ⚠ 刻意关闭（如实用空值，优于全量误标）：
+    #   本站所有页面页脚都写着「办公地址：北京市朝阳区安定路10号中国有色大厦」，
+    #   HTML 兜底正文里必然出现「北京市」；而 detect_area(title, content, cfg) 的
+    #   title/content 两个池子**都会参与匹配**（area.py:100-105，use_title_first 只决定顺序），
+    #   province_keywords 也拦不住（实测）。于是标题里没有地名时，地区必被页脚污染成「北京市」——
+    #   实测 cnmc_feizhao 30 条里 25 条误标北京市，而「中色大冶（湖北）」「阳新弘盛（湖北）」
+    #   这类项目实际都在湖北。
+    #   代价：标题含地名时也不再输出地区（如「赤峰中色…」本可给出内蒙古自治区）。
+    #   如确需地区，可靠做法是取真实项目所在地字段写入 list_extraction.area_selectors
+    #   （本站列表/详情页无该字段，故未配）。
+    enabled: false
+    use_title_first: true
+
+  output:
+    enabled: true
+    queue_zhaobiao: zhaobiao:result:zhaobiao
+    queue_zhongbiao: zhaobiao:result:zhongbiao
+    attachment_dir_zhaobiao: /root/pachong/zhaobiao/data/附件
+    attachment_dir_zhongbiao: /root/pachong/zhaobiao/data_zb/附件
+
+- id: cnmc_biangeng
+  enabled: true
+  name: 中国有色集团采购招标电子商务平台-变更公告
+  entry_urls:
+    - https://ecp.cnmc.com.cn/zgyscms/category/bulletinList.html?categoryId=3&purType=00,01
+
+  schedule:
+    enabled: true
+    interval_seconds: 3600
+
+  limits:
+    max_concurrency: 2
+    request_interval_seconds: 1.0
+
+  request:
+    method: GET
+    headers:
+      Referer: https://ecp.cnmc.com.cn/zgyscms/category/bulletinList.html?categoryId=3&purType=00,01
+      Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8
+    params: {}
+    timeout_seconds: 60
+    retries: 2
+    retry_backoff_seconds: 1.0
+    verify_ssl: true
+
+  pagination:
+    mode: page_param
+    start_page: 1
+    end_page: 3
+    page_param: page
+
+  crypto:
+    enabled: false
+
+  cookie:
+    enabled: false
+
+  dedup:
+    redis_hash_key: zhaobiao:domian:linkqc
+    ttl_days: 30
+    prune_probability: 0.01
+
+  list_extraction:
+    response_html_selectors: []
+    item_selectors:
+      - kind: xpath
+        expr: //tbody[@id="bulletinList"]/tr
+    link_selectors:
+      - kind: xpath
+        expr: .//a[1]/@href
+      - kind: xpath
+        expr: .//input[@type="hidden"]/@value
+    title_selectors:
+      - kind: xpath
+        expr: .//a[1]/@title
+      - kind: xpath
+        expr: .//a[1]//text()
+    date_selectors:
+      - kind: xpath
+        expr: .//td[2]//text()
+    min_title_length: 6
+    fallback_auto: false
+
+  detail_extraction:
+    response_html_selectors: []
+    content_selectors:
+      - kind: xpath
+        expr: //div[contains(@class, "contant")]
+      - kind: xpath
+        expr: //div[contains(@class, "title")]
+    title_selectors:
+      - kind: xpath
+        expr: //div[contains(@class, "title")]//text()
+    date_selectors: []
+    fallback_auto: false
+    fallback_readability: false
+    min_content_length: 30
+
+  attachments:
+    enabled: true
+    # 同 cnmc_zhaobiao：只截 <32位hex>，再用 url_template 拼成站点接受的 openFileById&id=<hex>
+    # 一个 regex 里放两个分组，命中哪种就走哪种（框架对每处命中取「第一个非空分组」）：
+    #   A) 新式（绝大多数）：iframe file= 是 …cgUploadController.do%26id%3D<32位hex>，第 2 组捕获 hex
+    #   B) 老式（如 2024 年的 resultBulletin/2024-07-17/248619.html，实测 1/30）：
+    #      file= 直接是 https://ecp.cnmc.com.cn/upload/2024/07-17/16-04-…-1240152180.pdf，第 1 组捕获整条绝对地址
+    #      （实测该地址 200 + application/pdf + %PDF-1.5 + 1,997,306 字节）
+    # 只用 A) 会漏掉 B)（实测 cnmc_zhongbiao 30 条里有 1 条因此没有附件）。
+    # 一个 regex、**只用捕获组 1**（框架对每处命中取「第一个非空捕获组」当 {value}），
+    # 两种真实形态各自给出**完整可下载 URL**：
+    #   A) 新式（绝大多数，实测 149/150）：iframe file= 原样就是
+    #      https://ecp.cnmc.com.cn/zgysdzzb/cgUploadController.do?openFileById%26id%3D<32位hex>
+    #      注意这里 ?openFileById 与 id 之间是 %26id%3D（& 被编码成 %26）——
+    #      直接用这个「原样 URL」匿名 GET 实测 200 + application/pdf + %PDF-1.5，
+    #      不需要还原成 &id=，也就**不需要 url_template 拼前缀**。
+    #   B) 老式（如 2024 年的 resultBulletin/2024-07-17/248619.html，实测 1/150）：
+    #      file= 直接是 https://ecp.cnmc.com.cn/upload/2024/07-17/16-04-…-1240152180.pdf
+    #      （实测 200 + application/pdf + %PDF-1.5 + 1,997,306 字节）。
+    # 踩过的坑（都实测过）：
+    #   · 只用 A 的旧写法 'openFileById%26id%3D([0-9a-f]{32})' + url_template 拼前缀时，
+    #     若把前缀写成 "…do?openFileById&id="，HTTP 客户端会把前缀的 ? 当第一段查询串，
+    #     拼出 "…?openFileById&<hex>"（缺 id=）→ 404；
+    #   · XPath 不能表达：concat(...) 返回字符串、//iframe/@src 返回节点集，
+    #     'string | nodeset' 会被 lxml 判为 Invalid type（实测）；
+    #   · 不要用 {fdId}：框架只把第 1 个捕获组放进 {value}，{fdId} 与 {value} 同值（详见 cdb_cg 注释里的对齐坑）。
+    # ⚠ 两个硬约束（都实测踩过）：
+    #   1) 整个表达式**只能有 1 个捕获组**。selectors 走 re.findall，2 个以上捕获组会返回**元组**，
+    #      框架把元组 str() 成 "('https://…', '')" 当附件 URL（实测 200 + 309 字节异常页，
+    #      180 条记录附件全废），故两条分支整体用 (?:…) 包住、整条 URL 一起捕获。
+    #   2) %26id%3D 形态**不能**直接当下载地址：实测 200 + text/html + 309 字节，
+    #      服务端报 UnsatisfiedServletRequestParameterException（Parameter conditions
+    #      "openFile" not met）。必须还原成 &id=<hex> 才是 200 + application/pdf。
+    #      实测对照：%26id%3D → 309 字节 HTML 异常页；&id= → 278,740 字节 %PDF-1.5。
+    #   因此捕获组 1 只取 <32位hex>，前缀（含 &id=）由 url_template 补回。
+    #   /upload/*.pdf 形态因此被排除（它对同一前缀会拼错 → 150 字节错误页）：
+    #      实测「交付页范围（各栏目第 1~3 页）共 540 条详情」里该形态只有 **1** 条
+    #      （2024 年的 resultBulletin 老公告，第 4 页以后才有更多），代价可接受。
+    selectors:
+      - kind: regex
+        expr: 'openFileById%26id%3D([0-9a-f]{32})'
+    url_template: "https://ecp.cnmc.com.cn/zgysdzzb/cgUploadController.do?openFileById&id={value}"
+    # URL 无后缀，必须留空 allowed_extensions
+    allowed_extensions: []
+    max_bytes: 52428800
+
+  classification:
+    # 变更/延期/澄清/补遗类，归招标侧
+    default_type: zhaobiao
+    zhongbiao_keywords: []
+
+  area_extraction:
+    # ⚠ 刻意关闭（如实用空值，优于全量误标）：
+    #   本站所有页面页脚都写着「办公地址：北京市朝阳区安定路10号中国有色大厦」，
+    #   HTML 兜底正文里必然出现「北京市」；而 detect_area(title, content, cfg) 的
+    #   title/content 两个池子**都会参与匹配**（area.py:100-105，use_title_first 只决定顺序），
+    #   province_keywords 也拦不住（实测）。于是标题里没有地名时，地区必被页脚污染成「北京市」——
+    #   实测 cnmc_feizhao 30 条里 25 条误标北京市，而「中色大冶（湖北）」「阳新弘盛（湖北）」
+    #   这类项目实际都在湖北。
+    #   代价：标题含地名时也不再输出地区（如「赤峰中色…」本可给出内蒙古自治区）。
+    #   如确需地区，可靠做法是取真实项目所在地字段写入 list_extraction.area_selectors
+    #   （本站列表/详情页无该字段，故未配）。
+    enabled: false
+    use_title_first: true
+
+  output:
+    enabled: true
+    queue_zhaobiao: zhaobiao:result:zhaobiao
+    queue_zhongbiao: zhaobiao:result:zhongbiao
+    attachment_dir_zhaobiao: /root/pachong/zhaobiao/data/附件
+    attachment_dir_zhongbiao: /root/pachong/zhaobiao/data_zb/附件
+
+- id: cnmc_zhongzhi
+  enabled: true
+  name: 中国有色集团采购招标电子商务平台-终止公告
+  entry_urls:
+    - https://ecp.cnmc.com.cn/zgyscms/category/bulletinList.html?categoryId=5&purType=00,01
+
+  schedule:
+    enabled: true
+    interval_seconds: 3600
+
+  limits:
+    max_concurrency: 2
+    request_interval_seconds: 1.0
+
+  request:
+    method: GET
+    headers:
+      Referer: https://ecp.cnmc.com.cn/zgyscms/category/bulletinList.html?categoryId=5&purType=00,01
+      Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8
+    params: {}
+    timeout_seconds: 60
+    retries: 2
+    retry_backoff_seconds: 1.0
+    verify_ssl: true
+
+  pagination:
+    mode: page_param
+    start_page: 1
+    end_page: 3
+    page_param: page
+
+  crypto:
+    enabled: false
+
+  cookie:
+    enabled: false
+
+  dedup:
+    redis_hash_key: zhaobiao:domian:linkqc
+    ttl_days: 30
+    prune_probability: 0.01
+
+  list_extraction:
+    response_html_selectors: []
+    item_selectors:
+      - kind: xpath
+        expr: //tbody[@id="bulletinList"]/tr
+    link_selectors:
+      - kind: xpath
+        expr: .//a[1]/@href
+      - kind: xpath
+        expr: .//input[@type="hidden"]/@value
+    title_selectors:
+      - kind: xpath
+        expr: .//a[1]/@title
+      - kind: xpath
+        expr: .//a[1]//text()
+    date_selectors:
+      - kind: xpath
+        expr: .//td[2]//text()
+    min_title_length: 6
+    fallback_auto: false
+
+  detail_extraction:
+    response_html_selectors: []
+    content_selectors:
+      - kind: xpath
+        expr: //div[contains(@class, "contant")]
+      - kind: xpath
+        expr: //div[contains(@class, "title")]
+    title_selectors:
+      - kind: xpath
+        expr: //div[contains(@class, "title")]//text()
+    date_selectors: []
+    fallback_auto: false
+    fallback_readability: false
+    min_content_length: 30
+
+  attachments:
+    enabled: true
+    # 同 cnmc_zhaobiao：只截 <32位hex>，再用 url_template 拼成站点接受的 openFileById&id=<hex>
+    # 一个 regex 里放两个分组，命中哪种就走哪种（框架对每处命中取「第一个非空分组」）：
+    #   A) 新式（绝大多数）：iframe file= 是 …cgUploadController.do%26id%3D<32位hex>，第 2 组捕获 hex
+    #   B) 老式（如 2024 年的 resultBulletin/2024-07-17/248619.html，实测 1/30）：
+    #      file= 直接是 https://ecp.cnmc.com.cn/upload/2024/07-17/16-04-…-1240152180.pdf，第 1 组捕获整条绝对地址
+    #      （实测该地址 200 + application/pdf + %PDF-1.5 + 1,997,306 字节）
+    # 只用 A) 会漏掉 B)（实测 cnmc_zhongbiao 30 条里有 1 条因此没有附件）。
+    # 一个 regex、**只用捕获组 1**（框架对每处命中取「第一个非空捕获组」当 {value}），
+    # 两种真实形态各自给出**完整可下载 URL**：
+    #   A) 新式（绝大多数，实测 149/150）：iframe file= 原样就是
+    #      https://ecp.cnmc.com.cn/zgysdzzb/cgUploadController.do?openFileById%26id%3D<32位hex>
+    #      注意这里 ?openFileById 与 id 之间是 %26id%3D（& 被编码成 %26）——
+    #      直接用这个「原样 URL」匿名 GET 实测 200 + application/pdf + %PDF-1.5，
+    #      不需要还原成 &id=，也就**不需要 url_template 拼前缀**。
+    #   B) 老式（如 2024 年的 resultBulletin/2024-07-17/248619.html，实测 1/150）：
+    #      file= 直接是 https://ecp.cnmc.com.cn/upload/2024/07-17/16-04-…-1240152180.pdf
+    #      （实测 200 + application/pdf + %PDF-1.5 + 1,997,306 字节）。
+    # 踩过的坑（都实测过）：
+    #   · 只用 A 的旧写法 'openFileById%26id%3D([0-9a-f]{32})' + url_template 拼前缀时，
+    #     若把前缀写成 "…do?openFileById&id="，HTTP 客户端会把前缀的 ? 当第一段查询串，
+    #     拼出 "…?openFileById&<hex>"（缺 id=）→ 404；
+    #   · XPath 不能表达：concat(...) 返回字符串、//iframe/@src 返回节点集，
+    #     'string | nodeset' 会被 lxml 判为 Invalid type（实测）；
+    #   · 不要用 {fdId}：框架只把第 1 个捕获组放进 {value}，{fdId} 与 {value} 同值（详见 cdb_cg 注释里的对齐坑）。
+    # ⚠ 两个硬约束（都实测踩过）：
+    #   1) 整个表达式**只能有 1 个捕获组**。selectors 走 re.findall，2 个以上捕获组会返回**元组**，
+    #      框架把元组 str() 成 "('https://…', '')" 当附件 URL（实测 200 + 309 字节异常页，
+    #      180 条记录附件全废），故两条分支整体用 (?:…) 包住、整条 URL 一起捕获。
+    #   2) %26id%3D 形态**不能**直接当下载地址：实测 200 + text/html + 309 字节，
+    #      服务端报 UnsatisfiedServletRequestParameterException（Parameter conditions
+    #      "openFile" not met）。必须还原成 &id=<hex> 才是 200 + application/pdf。
+    #      实测对照：%26id%3D → 309 字节 HTML 异常页；&id= → 278,740 字节 %PDF-1.5。
+    #   因此捕获组 1 只取 <32位hex>，前缀（含 &id=）由 url_template 补回。
+    #   /upload/*.pdf 形态因此被排除（它对同一前缀会拼错 → 150 字节错误页）：
+    #      实测「交付页范围（各栏目第 1~3 页）共 540 条详情」里该形态只有 **1** 条
+    #      （2024 年的 resultBulletin 老公告，第 4 页以后才有更多），代价可接受。
+    selectors:
+      - kind: regex
+        expr: 'openFileById%26id%3D([0-9a-f]{32})'
+    url_template: "https://ecp.cnmc.com.cn/zgysdzzb/cgUploadController.do?openFileById&id={value}"
+    # URL 无后缀，必须留空 allowed_extensions
+    allowed_extensions: []
+    max_bytes: 52428800
+
+  classification:
+    # 终止/流标类，归招标侧（该栏偶见"中标公告"字样条目，仍按栏目固定分类）
+    default_type: zhaobiao
+    zhongbiao_keywords: []
+
+  area_extraction:
+    # ⚠ 刻意关闭（如实用空值，优于全量误标）：
+    #   本站所有页面页脚都写着「办公地址：北京市朝阳区安定路10号中国有色大厦」，
+    #   HTML 兜底正文里必然出现「北京市」；而 detect_area(title, content, cfg) 的
+    #   title/content 两个池子**都会参与匹配**（area.py:100-105，use_title_first 只决定顺序），
+    #   province_keywords 也拦不住（实测）。于是标题里没有地名时，地区必被页脚污染成「北京市」——
+    #   实测 cnmc_feizhao 30 条里 25 条误标北京市，而「中色大冶（湖北）」「阳新弘盛（湖北）」
+    #   这类项目实际都在湖北。
+    #   代价：标题含地名时也不再输出地区（如「赤峰中色…」本可给出内蒙古自治区）。
+    #   如确需地区，可靠做法是取真实项目所在地字段写入 list_extraction.area_selectors
+    #   （本站列表/详情页无该字段，故未配）。
+    enabled: false
+    use_title_first: true
+
+  output:
+    enabled: true
+    queue_zhaobiao: zhaobiao:result:zhaobiao
+    queue_zhongbiao: zhaobiao:result:zhongbiao
+    attachment_dir_zhaobiao: /root/pachong/zhaobiao/data/附件
+    attachment_dir_zhongbiao: /root/pachong/zhaobiao/data_zb/附件
+
+- id: cnmc_dayi
+  enabled: true
+  name: 中国有色集团采购招标电子商务平台-答疑补遗
+  entry_urls:
+    - https://ecp.cnmc.com.cn/zgyscms/category/bulletinList.html?categoryId=6&purType=00,01
+
+  schedule:
+    enabled: true
+    interval_seconds: 3600
+
+  limits:
+    max_concurrency: 2
+    request_interval_seconds: 1.0
+
+  request:
+    method: GET
+    headers:
+      Referer: https://ecp.cnmc.com.cn/zgyscms/category/bulletinList.html?categoryId=6&purType=00,01
+      Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8
+    params: {}
+    timeout_seconds: 60
+    retries: 2
+    retry_backoff_seconds: 1.0
+    verify_ssl: true
+
+  pagination:
+    mode: page_param
+    start_page: 1
+    end_page: 3
+    page_param: page
+
+  crypto:
+    enabled: false
+
+  cookie:
+    enabled: false
+
+  dedup:
+    redis_hash_key: zhaobiao:domian:linkqc
+    ttl_days: 30
+    prune_probability: 0.01
+
+  list_extraction:
+    response_html_selectors: []
+    item_selectors:
+      - kind: xpath
+        expr: //tbody[@id="bulletinList"]/tr
+    link_selectors:
+      # 该栏目实测 30/30 行都没有 href，只能靠隐藏 input 的 value 取详情 URL
+      - kind: xpath
+        expr: .//a[1]/@href
+      - kind: xpath
+        expr: .//input[@type="hidden"]/@value
+    title_selectors:
+      - kind: xpath
+        expr: .//a[1]/@title
+      - kind: xpath
+        expr: .//a[1]//text()
+    date_selectors:
+      - kind: xpath
+        expr: .//td[2]//text()
+    min_title_length: 6
+    fallback_auto: false
+
+  detail_extraction:
+    response_html_selectors: []
+    content_selectors:
+      - kind: xpath
+        expr: //div[contains(@class, "contant")]
+      - kind: xpath
+        expr: //div[contains(@class, "title")]
+    title_selectors:
+      - kind: xpath
+        expr: //div[contains(@class, "title")]//text()
+    date_selectors: []
+    fallback_auto: false
+    fallback_readability: false
+    min_content_length: 30
+
+  attachments:
+    enabled: true
+    # 同 cnmc_zhaobiao：只截 <32位hex>，再用 url_template 拼成站点接受的 openFileById&id=<hex>
+    # 一个 regex 里放两个分组，命中哪种就走哪种（框架对每处命中取「第一个非空分组」）：
+    #   A) 新式（绝大多数）：iframe file= 是 …cgUploadController.do%26id%3D<32位hex>，第 2 组捕获 hex
+    #   B) 老式（如 2024 年的 resultBulletin/2024-07-17/248619.html，实测 1/30）：
+    #      file= 直接是 https://ecp.cnmc.com.cn/upload/2024/07-17/16-04-…-1240152180.pdf，第 1 组捕获整条绝对地址
+    #      （实测该地址 200 + application/pdf + %PDF-1.5 + 1,997,306 字节）
+    # 只用 A) 会漏掉 B)（实测 cnmc_zhongbiao 30 条里有 1 条因此没有附件）。
+    # 一个 regex、**只用捕获组 1**（框架对每处命中取「第一个非空捕获组」当 {value}），
+    # 两种真实形态各自给出**完整可下载 URL**：
+    #   A) 新式（绝大多数，实测 149/150）：iframe file= 原样就是
+    #      https://ecp.cnmc.com.cn/zgysdzzb/cgUploadController.do?openFileById%26id%3D<32位hex>
+    #      注意这里 ?openFileById 与 id 之间是 %26id%3D（& 被编码成 %26）——
+    #      直接用这个「原样 URL」匿名 GET 实测 200 + application/pdf + %PDF-1.5，
+    #      不需要还原成 &id=，也就**不需要 url_template 拼前缀**。
+    #   B) 老式（如 2024 年的 resultBulletin/2024-07-17/248619.html，实测 1/150）：
+    #      file= 直接是 https://ecp.cnmc.com.cn/upload/2024/07-17/16-04-…-1240152180.pdf
+    #      （实测 200 + application/pdf + %PDF-1.5 + 1,997,306 字节）。
+    # 踩过的坑（都实测过）：
+    #   · 只用 A 的旧写法 'openFileById%26id%3D([0-9a-f]{32})' + url_template 拼前缀时，
+    #     若把前缀写成 "…do?openFileById&id="，HTTP 客户端会把前缀的 ? 当第一段查询串，
+    #     拼出 "…?openFileById&<hex>"（缺 id=）→ 404；
+    #   · XPath 不能表达：concat(...) 返回字符串、//iframe/@src 返回节点集，
+    #     'string | nodeset' 会被 lxml 判为 Invalid type（实测）；
+    #   · 不要用 {fdId}：框架只把第 1 个捕获组放进 {value}，{fdId} 与 {value} 同值（详见 cdb_cg 注释里的对齐坑）。
+    # ⚠ 两个硬约束（都实测踩过）：
+    #   1) 整个表达式**只能有 1 个捕获组**。selectors 走 re.findall，2 个以上捕获组会返回**元组**，
+    #      框架把元组 str() 成 "('https://…', '')" 当附件 URL（实测 200 + 309 字节异常页，
+    #      180 条记录附件全废），故两条分支整体用 (?:…) 包住、整条 URL 一起捕获。
+    #   2) %26id%3D 形态**不能**直接当下载地址：实测 200 + text/html + 309 字节，
+    #      服务端报 UnsatisfiedServletRequestParameterException（Parameter conditions
+    #      "openFile" not met）。必须还原成 &id=<hex> 才是 200 + application/pdf。
+    #      实测对照：%26id%3D → 309 字节 HTML 异常页；&id= → 278,740 字节 %PDF-1.5。
+    #   因此捕获组 1 只取 <32位hex>，前缀（含 &id=）由 url_template 补回。
+    #   /upload/*.pdf 形态因此被排除（它对同一前缀会拼错 → 150 字节错误页）：
+    #      实测「交付页范围（各栏目第 1~3 页）共 540 条详情」里该形态只有 **1** 条
+    #      （2024 年的 resultBulletin 老公告，第 4 页以后才有更多），代价可接受。
+    selectors:
+      - kind: regex
+        expr: 'openFileById%26id%3D([0-9a-f]{32})'
+    url_template: "https://ecp.cnmc.com.cn/zgysdzzb/cgUploadController.do?openFileById&id={value}"
+    # URL 无后缀，必须留空 allowed_extensions
+    allowed_extensions: []
+    max_bytes: 52428800
+
+  classification:
+    # 答疑/澄清/补遗类，归招标侧
+    default_type: zhaobiao
+    zhongbiao_keywords: []
+
+  area_extraction:
+    # ⚠ 刻意关闭（如实用空值，优于全量误标）：
+    #   本站所有页面页脚都写着「办公地址：北京市朝阳区安定路10号中国有色大厦」，
+    #   HTML 兜底正文里必然出现「北京市」；而 detect_area(title, content, cfg) 的
+    #   title/content 两个池子**都会参与匹配**（area.py:100-105，use_title_first 只决定顺序），
+    #   province_keywords 也拦不住（实测）。于是标题里没有地名时，地区必被页脚污染成「北京市」——
+    #   实测 cnmc_feizhao 30 条里 25 条误标北京市，而「中色大冶（湖北）」「阳新弘盛（湖北）」
+    #   这类项目实际都在湖北。
+    #   代价：标题含地名时也不再输出地区（如「赤峰中色…」本可给出内蒙古自治区）。
+    #   如确需地区，可靠做法是取真实项目所在地字段写入 list_extraction.area_selectors
+    #   （本站列表/详情页无该字段，故未配）。
+    enabled: false
+    use_title_first: true
+
+  output:
+    enabled: true
+    queue_zhaobiao: zhaobiao:result:zhaobiao
+    queue_zhongbiao: zhaobiao:result:zhongbiao
+    attachment_dir_zhaobiao: /root/pachong/zhaobiao/data/附件
+    attachment_dir_zhongbiao: /root/pachong/zhaobiao/data_zb/附件
+
+- id: cnmc_zhongbiao
+  enabled: true
+  name: 中国有色集团采购招标电子商务平台-中标成交公示
+  entry_urls:
+    - https://ecp.cnmc.com.cn/zgyscms/category/bulletinList.html?categoryId=4
+
+  schedule:
+    enabled: true
+    interval_seconds: 3600
+
+  limits:
+    max_concurrency: 2
+    request_interval_seconds: 1.0
+
+  request:
+    method: GET
+    headers:
+      Referer: https://ecp.cnmc.com.cn/zgyscms/category/bulletinList.html?categoryId=4
+      Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8
+    params: {}
+    timeout_seconds: 60
+    retries: 2
+    retry_backoff_seconds: 1.0
+    verify_ssl: true
+
+  pagination:
+    mode: page_param
+    start_page: 1
+    end_page: 3
+    page_param: page
+
+  crypto:
+    enabled: false
+
+  cookie:
+    enabled: false
+
+  dedup:
+    redis_hash_key: zhaobiao:domian:linkqc
+    ttl_days: 30
+    prune_probability: 0.01
+
+  list_extraction:
+    response_html_selectors: []
+    item_selectors:
+      - kind: xpath
+        expr: //tbody[@id="bulletinList"]/tr
+    link_selectors:
+      - kind: xpath
+        expr: .//a[1]/@href
+      - kind: xpath
+        expr: .//input[@type="hidden"]/@value
+    title_selectors:
+      - kind: xpath
+        expr: .//a[1]/@title
+      - kind: xpath
+        expr: .//a[1]//text()
+    date_selectors:
+      - kind: xpath
+        expr: .//td[2]//text()
+    min_title_length: 6
+    fallback_auto: false
+
+  detail_extraction:
+    response_html_selectors: []
+    content_selectors:
+      - kind: xpath
+        expr: //div[contains(@class, "contant")]
+      - kind: xpath
+        expr: //div[contains(@class, "title")]
+    title_selectors:
+      - kind: xpath
+        expr: //div[contains(@class, "title")]//text()
+    date_selectors: []
+    fallback_auto: false
+    fallback_readability: false
+    min_content_length: 30
+
+  attachments:
+    enabled: true
+    # 同 cnmc_zhaobiao：只截 <32位hex>，再用 url_template 拼成站点接受的 openFileById&id=<hex>
+    # 一个 regex 里放两个分组，命中哪种就走哪种（框架对每处命中取「第一个非空分组」）：
+    #   A) 新式（绝大多数）：iframe file= 是 …cgUploadController.do%26id%3D<32位hex>，第 2 组捕获 hex
+    #   B) 老式（如 2024 年的 resultBulletin/2024-07-17/248619.html，实测 1/30）：
+    #      file= 直接是 https://ecp.cnmc.com.cn/upload/2024/07-17/16-04-…-1240152180.pdf，第 1 组捕获整条绝对地址
+    #      （实测该地址 200 + application/pdf + %PDF-1.5 + 1,997,306 字节）
+    # 只用 A) 会漏掉 B)（实测 cnmc_zhongbiao 30 条里有 1 条因此没有附件）。
+    # 一个 regex、**只用捕获组 1**（框架对每处命中取「第一个非空捕获组」当 {value}），
+    # 两种真实形态各自给出**完整可下载 URL**：
+    #   A) 新式（绝大多数，实测 149/150）：iframe file= 原样就是
+    #      https://ecp.cnmc.com.cn/zgysdzzb/cgUploadController.do?openFileById%26id%3D<32位hex>
+    #      注意这里 ?openFileById 与 id 之间是 %26id%3D（& 被编码成 %26）——
+    #      直接用这个「原样 URL」匿名 GET 实测 200 + application/pdf + %PDF-1.5，
+    #      不需要还原成 &id=，也就**不需要 url_template 拼前缀**。
+    #   B) 老式（如 2024 年的 resultBulletin/2024-07-17/248619.html，实测 1/150）：
+    #      file= 直接是 https://ecp.cnmc.com.cn/upload/2024/07-17/16-04-…-1240152180.pdf
+    #      （实测 200 + application/pdf + %PDF-1.5 + 1,997,306 字节）。
+    # 踩过的坑（都实测过）：
+    #   · 只用 A 的旧写法 'openFileById%26id%3D([0-9a-f]{32})' + url_template 拼前缀时，
+    #     若把前缀写成 "…do?openFileById&id="，HTTP 客户端会把前缀的 ? 当第一段查询串，
+    #     拼出 "…?openFileById&<hex>"（缺 id=）→ 404；
+    #   · XPath 不能表达：concat(...) 返回字符串、//iframe/@src 返回节点集，
+    #     'string | nodeset' 会被 lxml 判为 Invalid type（实测）；
+    #   · 不要用 {fdId}：框架只把第 1 个捕获组放进 {value}，{fdId} 与 {value} 同值（详见 cdb_cg 注释里的对齐坑）。
+    # ⚠ 两个硬约束（都实测踩过）：
+    #   1) 整个表达式**只能有 1 个捕获组**。selectors 走 re.findall，2 个以上捕获组会返回**元组**，
+    #      框架把元组 str() 成 "('https://…', '')" 当附件 URL（实测 200 + 309 字节异常页，
+    #      180 条记录附件全废），故两条分支整体用 (?:…) 包住、整条 URL 一起捕获。
+    #   2) %26id%3D 形态**不能**直接当下载地址：实测 200 + text/html + 309 字节，
+    #      服务端报 UnsatisfiedServletRequestParameterException（Parameter conditions
+    #      "openFile" not met）。必须还原成 &id=<hex> 才是 200 + application/pdf。
+    #      实测对照：%26id%3D → 309 字节 HTML 异常页；&id= → 278,740 字节 %PDF-1.5。
+    #   因此捕获组 1 只取 <32位hex>，前缀（含 &id=）由 url_template 补回。
+    #   /upload/*.pdf 形态因此被排除（它对同一前缀会拼错 → 150 字节错误页）：
+    #      实测「交付页范围（各栏目第 1~3 页）共 540 条详情」里该形态只有 **1** 条
+    #      （2024 年的 resultBulletin 老公告，第 4 页以后才有更多），代价可接受。
+    selectors:
+      - kind: regex
+        expr: 'openFileById%26id%3D([0-9a-f]{32})'
+    url_template: "https://ecp.cnmc.com.cn/zgysdzzb/cgUploadController.do?openFileById&id={value}"
+    # URL 无后缀，必须留空 allowed_extensions
+    allowed_extensions: []
+    max_bytes: 52428800
+
+  classification:
+    # 结果类固定栏目：实测 90 条标题中「成交公示」80 条、「中标公示」6 条，全为结果类
+    default_type: zhongbiao
+    zhongbiao_keywords: []
+
+  area_extraction:
+    # ⚠ 刻意关闭（如实用空值，优于全量误标）：
+    #   本站所有页面页脚都写着「办公地址：北京市朝阳区安定路10号中国有色大厦」，
+    #   HTML 兜底正文里必然出现「北京市」；而 detect_area(title, content, cfg) 的
+    #   title/content 两个池子**都会参与匹配**（area.py:100-105，use_title_first 只决定顺序），
+    #   province_keywords 也拦不住（实测）。于是标题里没有地名时，地区必被页脚污染成「北京市」——
+    #   实测 cnmc_feizhao 30 条里 25 条误标北京市，而「中色大冶（湖北）」「阳新弘盛（湖北）」
+    #   这类项目实际都在湖北。
+    #   代价：标题含地名时也不再输出地区（如「赤峰中色…」本可给出内蒙古自治区）。
+    #   如确需地区，可靠做法是取真实项目所在地字段写入 list_extraction.area_selectors
+    #   （本站列表/详情页无该字段，故未配）。
+    enabled: false
+    use_title_first: true
+
+  output:
+    enabled: true
+    queue_zhaobiao: zhaobiao:result:zhaobiao
+    queue_zhongbiao: zhaobiao:result:zhongbiao
+    attachment_dir_zhaobiao: /root/pachong/zhaobiao/data/附件
+    attachment_dir_zhongbiao: /root/pachong/zhaobiao/data_zb/附件

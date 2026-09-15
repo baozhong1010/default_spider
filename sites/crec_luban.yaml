@@ -1,0 +1,748 @@
+# ⚠️ 本文件 6 个站点当前全部置为 enabled: false（停用，仅作分析留存）
+#    原因：该平台公开可抓的只有「历史公告查询」归档接口（数据范围约 2018-01 ~ 2021-11-02，
+#    已停止更新），且**站点没有按 tid 取单篇公告的正文页/正文接口**（列表行 <a> 无 href、
+#    各类 /historyNotice/{tid} 变体全部返回 {}），因此每条记录的「正文内容」只能是
+#    响应里的元数据片段（各栏目恒定 15~68 字），不是公告正文。
+#    标题 / 时间 / 地区 / 原文链接逐条准确，若下游只要历史元数据，可把对应站点改回 enabled: true。
+#    现行公告（2021-11 之后）在登录墙后：eproport/eprotrans -> passport.crecgec.com/CAS/login。
+# 中铁鲁班商务网 / 中国中铁电子采购平台（https://www.crecgec.com/）
+# 站点性质：Angular 单页应用（<base href="/portal/">，hash 路由 /portal/#/...），
+#           HTML 外壳里没有任何列表数据，全部数据走后端 JSON 接口。
+#
+# ============================ 可达性 ============================
+# 直连与系统代理(127.0.0.1:7890)均可访问，无 UA 时返回 403/303，带浏览器 UA 即 200。
+# 注意该站 TLS 会反复 renegotiation（schannel: remote party requests renegotiation），
+# curl/Python urllib 都能正常完成；verify_ssl 关闭。
+#
+# ============================ 平台结构（CDP 抓包实测） ============================
+# 首页 https://www.crecgec.com/ 200 / 63353 字节（title「中铁鲁班商务网」）。
+# 导航（POST /portal/crec-portal/queryNavList）：
+#   首页 / 电子采购(eproport.crecgec.com) / 网上商城 / 商旅服务 / 租赁服务 /
+#   闲废资源 / 鲁班网校 / 更多{历史公告查询 /portal、海外采购门户 intlportal}
+#
+# 【公开可抓·本配置覆盖】历史公告查询 http://www.crecgec.com/portal/#/service/search
+#   列表（共 6 个栏目 tab，CDP 点击 tab 抓 queryName 得到）：
+#     POST /portal/crec-portal/portal/historyNotice
+#          ?pageNo={page}&pageSize=10&queryName={queryName}&searchText=&signId={随机}
+#     请求体：{}（Content-Type: application/json；实测空对象即可，不需要签名）
+#     响应：{resultCode:1, resultMsg:"获取数据成功",
+#            data:{pageNum, pageSize, total, list:[{
+#              tid, rfqcode, noticetypename, noticetitle, pubtime, area,
+#              purcompanyname, organizationalname, createTime, noticeDate}]}}
+#     queryName 实测映射（栏目名 → queryName → total）：
+#       采购公告      purchaseNotice   10000（封顶值）
+#       竞争性谈判    cnNotice         10000（封顶值）
+#       澄清补遗      noticeEx         10000（封顶值）
+#       中标公示      bidNotice        10000（封顶值）
+#       合格供应商招募 supplierNotice         0（站点该栏目暂无数据）
+#       竞价采购      cqNotice           438
+#     ⚠ total 恒为 10000 是服务端的展示封顶值（pageNo=1000 时 resultCode 变 null、list 空），
+#       实际可翻到 pageNo≈500；数据时间范围约 2018-01 ~ 2021-11-02。
+#     searchText 关键字过滤有效（如 searchText=钢材 → total=2799）。
+#
+# 【受阻·未配置】现行（2021-11 之后）的招标/中标公告
+#   1) 电子采购 eproport.crecgec.com / 供方交易 eprotrans.crecgec.com
+#      一律 302 → https://passport.crecgec.com/CAS/login?service=...，需供应商账号登录。
+#   2) 网站通知类 POST /portal/crec-portal/portal/notice/ 虽然公开（total=104，近 2 年），
+#      但分页参数被服务端忽略、恒只返回 7 条，且 detail 接口（POST
+#      /portal/crec-portal/portal/notice/{id}）的正文字段 data.articleContent 是
+#      **AES/3DES 密文**，页面由前端 bizCommonConfigService.DES3.defaultDecrypt 解密。
+#      框架 crypto 模块（spider/crypto/epoint.py）只支持 Epoint 的 SM2/AES 方案，
+#      无法解该站密文，故该栏目不配置（否则只能落一坨 base64 密文）。
+#      （用 CDP 调页面内的 DES3.decrypt 也返回空串——key/iv 由服务端在鉴权上下文下发。）
+#   3) 海外采购门户 intlportal.crecgec.com 的
+#      POST /international-portal/portal/project/listWithHomePage 返回
+#      {"resultCode":-1,"resultMsg":"参数公告类型为空"}，参数名未定位，未采。
+#
+# 【重要限制·请先读】历史公告的**公告正文接口不存在**
+#   实测 /crec-portal/portal/historyNotice/{tid}、/historyNotice/detail/{tid}、
+#   /historyNoticeDetail/{tid}、GET /historyNotice?tid= 等一律 200 + "{}"；
+#   用历史 tid 调 /portal/notice/{tid} 返回「公告不存在。」。
+#   前端「历史公告」列表行亦无任何 <a href>（CDP 读 tbody a 的 href 全为 null），点击不下钻。
+#   即该栏目在站点上本来就是「只有列表元数据、没有可打开正文」的归档查询页。
+#   → 正文只能取一个恒定字段占位（noticetypename），标题/日期/地区一律用列表项自身的值。
+#     这是站点数据源限制，不是抓取失败。
+#
+# ============================ 接口参数硬约束（踩坑记录） ============================
+# 该归档接口必须 queryName + pageSize + pageNo + signId + searchText **全部存在**，
+# 少任何一个都返回 2 字节 {}；并且：
+#   · 重复的 queryName  → 直接返回 {}（致命）
+#   · 重复的 pageSize   → 可以，服务端取**第一个**
+#   · 重复的 signId     → 可以
+# 引擎在抓详情时会把 site.request.params 追加到详情 URL 之后，因此：
+#   · queryName / pageSize 必须写进 URL 模板（pagination.mode=url_template），
+#     site.request.params 里只留 searchText 与 signId。
+#
+# ============================ 配置要点 ============================
+# · 6 个栏目 = 6 条站点配置。
+# · entry_urls 指向列表接口本身；请求体为空（引擎对 POST 发 b""，实测与 {} 等价）。
+# · pagination.mode=url_template，模板里带完整 query 串并含 {page}。
+# · detail_request：同一归档接口，URL 里 pageSize=1 写在前面（服务端取第一个），
+#   引擎追加的 pageSize=20 被忽略 → 详情响应只含 1 条记录，regex 才能稳定命中。
+# · 原文链接 detail_url_template → 人类可读的归档查询页（带 queryName/tid）。
+# · attachments：列表与详情响应里都没有任何附件字段 → attachments.enabled=false。
+
+- id: crec_luban_cggg
+  enabled: false
+  name: 中铁鲁班商务网-历史公告-采购公告
+  entry_urls:
+    - https://www.crecgec.com/portal/crec-portal/portal/historyNotice
+
+  schedule:
+    enabled: true
+    interval_seconds: 3600
+
+  limits:
+    max_concurrency: 3
+    request_interval_seconds: 0.4
+
+  request:
+    method: POST
+    headers:
+      Accept: application/json, text/plain, */*
+      Content-Type: application/json;charset=UTF-8
+      Origin: https://www.crecgec.com
+      Referer: https://www.crecgec.com/portal/
+    # searchText 必须存在（缺了接口返回 {}）；signId 服务端不校验，填固定占位值。
+    # queryName / pageSize 放进 pagination.url_template，绝不能放这里（重复 queryName 会让接口返回 {}）。
+    params:
+      searchText: ""
+      signId: crecspider
+    timeout_seconds: 40
+    retries: 2
+    retry_backoff_seconds: 0.8
+    verify_ssl: false
+
+  pagination:
+    mode: url_template
+    start_page: 1
+    end_page: 3
+    url_template: "https://www.crecgec.com/portal/crec-portal/portal/historyNotice?pageNo={page}&queryName=purchaseNotice&pageSize=20&signId=crecspider"
+
+  crypto:
+    enabled: false
+
+  cookie:
+    enabled: false
+
+  detail_request:
+    # 该站历史公告没有可打开的正文页：前端列表行没有 <a href>，点击不下钻，
+    # 且 /historyNotice/{tid}、/historyNotice/detail/{tid}、/portal/notice/{tid}
+    # 一律返回 "{}" 或「公告不存在。」。
+    # 因此详情只能再打同一个归档接口；接口忽略请求体、也不接受按 tid 定向，
+    # 这里靠「页大小」把它收窄成只返回 1 条记录，好让下面的 regex 稳定命中。
+    method: POST
+    # 服务端对重复查询参数取**第一个** pageSize；引擎会把 request.params 追加在本 URL 之后，
+    # 故这里先写 pageSize=1，追加进来的重复 pageSize（若有）不会生效。
+    # searchText= 必须保留在 URL 里，否则接口返回 {}。
+    url_template: "https://www.crecgec.com/portal/crec-portal/portal/historyNotice?queryName=purchaseNotice&pageSize=1&pageNo=1&signId=crecspider&searchText="
+
+  dedup:
+    redis_hash_key: zhaobiao:domian:linkqc
+    ttl_days: 30
+    prune_probability: 0.01
+
+  list_extraction:
+    response_html_selectors: []
+    item_selectors:
+      - kind: jsonpath
+        expr: $.data.list[*]
+    link_selectors:
+      - kind: jsonpath
+        expr: $.tid
+    title_selectors:
+      - kind: jsonpath
+        expr: $.noticetitle
+    date_selectors:
+      - kind: jsonpath
+        expr: $.pubtime
+    area_selectors:
+      - kind: jsonpath
+        expr: $.area
+    detail_url_template: "https://www.crecgec.com/portal/#/service/search?queryName=purchaseNotice&tid={tid}"
+    min_title_length: 5
+    fallback_auto: false
+
+  detail_extraction:
+    response_html_selectors: []
+    # 详情接口对每条记录都返回同一份「首条归档」JSON，无法按 tid 定向，
+    # 因此正文只取一个恒定的字段做占位（公告类型），标题/日期/地区一律用列表项自身的值。
+    content_selectors:
+      - kind: regex
+        expr: '"noticetypename":"([^"]*)"'
+    # 详情响应恒定（同一条归档记录），所以标题/日期一律不从这里取，
+    # 否则会把所有记录的日期覆盖成同一个值；留空即由引擎回退到列表项自身的值。
+    title_selectors: []
+    date_selectors: []
+    fallback_auto: false
+    fallback_readability: false
+    min_content_length: 2
+
+  attachments:
+    enabled: false
+
+  classification:
+    # 采购公告 = 招标/采购类
+    default_type: zhaobiao
+    zhongbiao_keywords: []
+
+  area_extraction:
+    enabled: true
+    use_title_first: true
+
+  output:
+    enabled: true
+    queue_zhaobiao: zhaobiao:result:zhaobiao
+    queue_zhongbiao: zhaobiao:result:zhongbiao
+    attachment_dir_zhaobiao: /root/pachong/zhaobiao/data/附件
+    attachment_dir_zhongbiao: /root/pachong/zhaobiao/data_zb/附件
+
+- id: crec_luban_jzxtp
+  enabled: false
+  name: 中铁鲁班商务网-历史公告-竞争性谈判
+  entry_urls:
+    - https://www.crecgec.com/portal/crec-portal/portal/historyNotice
+
+  schedule:
+    enabled: true
+    interval_seconds: 3600
+
+  limits:
+    max_concurrency: 3
+    request_interval_seconds: 0.4
+
+  request:
+    method: POST
+    headers:
+      Accept: application/json, text/plain, */*
+      Content-Type: application/json;charset=UTF-8
+      Origin: https://www.crecgec.com
+      Referer: https://www.crecgec.com/portal/
+    params:
+      searchText: ""
+      signId: crecspider
+    timeout_seconds: 40
+    retries: 2
+    retry_backoff_seconds: 0.8
+    verify_ssl: false
+
+  pagination:
+    mode: url_template
+    start_page: 1
+    end_page: 3
+    url_template: "https://www.crecgec.com/portal/crec-portal/portal/historyNotice?pageNo={page}&queryName=cnNotice&pageSize=20&signId=crecspider"
+
+  crypto:
+    enabled: false
+
+  cookie:
+    enabled: false
+
+  detail_request:
+    # 该站历史公告没有可打开的正文页：前端列表行没有 <a href>，点击不下钻，
+    # 且 /historyNotice/{tid}、/historyNotice/detail/{tid}、/portal/notice/{tid}
+    # 一律返回 "{}" 或「公告不存在。」。
+    # 因此详情仍打同一个归档接口（服务端按 pageNo 分页、忽略多余的查询参数）；
+    # {value}/{link} 会被引擎替换成列表项的 raw_url（即 tid）。
+    method: POST
+    # 服务端对重复查询参数取**第一个** pageSize，因此这里先写 pageSize=1，
+    # 引擎随后追加的 site.request.params(pageSize=20) 会被忽略 → 详情只返回 1 条。
+    url_template: "https://www.crecgec.com/portal/crec-portal/portal/historyNotice?queryName=cnNotice&pageSize=1&pageNo=1&signId=crecspider&searchText="
+
+  dedup:
+    redis_hash_key: zhaobiao:domian:linkqc
+    ttl_days: 30
+    prune_probability: 0.01
+
+  list_extraction:
+    response_html_selectors: []
+    item_selectors:
+      - kind: jsonpath
+        expr: $.data.list[*]
+    link_selectors:
+      - kind: jsonpath
+        expr: $.tid
+    title_selectors:
+      - kind: jsonpath
+        expr: $.noticetitle
+    date_selectors:
+      - kind: jsonpath
+        expr: $.pubtime
+    area_selectors:
+      - kind: jsonpath
+        expr: $.area
+    detail_url_template: "https://www.crecgec.com/portal/#/service/search?queryName=cnNotice&tid={tid}"
+    min_title_length: 5
+    fallback_auto: false
+
+  detail_extraction:
+    response_html_selectors: []
+    content_selectors:
+      - kind: regex
+        expr: '"(?:noticetitle|noticetypename|rfqcode|pubtime|area|purcompanyname|organizationalname)":"[^"]*"'
+    # 详情响应恒定（同一条归档记录），所以标题/日期一律不从这里取，
+    # 否则会把所有记录的日期覆盖成同一个值；留空即由引擎回退到列表项自身的值。
+    title_selectors: []
+    date_selectors: []
+    fallback_auto: false
+    fallback_readability: false
+    min_content_length: 2
+
+  attachments:
+    enabled: false
+
+  classification:
+    # 竞争性谈判属于采购（招标）类
+    default_type: zhaobiao
+    zhongbiao_keywords: []
+
+  area_extraction:
+    enabled: true
+    use_title_first: true
+
+  output:
+    enabled: true
+    queue_zhaobiao: zhaobiao:result:zhaobiao
+    queue_zhongbiao: zhaobiao:result:zhongbiao
+    attachment_dir_zhaobiao: /root/pachong/zhaobiao/data/附件
+    attachment_dir_zhongbiao: /root/pachong/zhaobiao/data_zb/附件
+
+- id: crec_luban_qzby
+  enabled: false
+  name: 中铁鲁班商务网-历史公告-澄清补遗
+  entry_urls:
+    - https://www.crecgec.com/portal/crec-portal/portal/historyNotice
+
+  schedule:
+    enabled: true
+    interval_seconds: 3600
+
+  limits:
+    max_concurrency: 3
+    request_interval_seconds: 0.4
+
+  request:
+    method: POST
+    headers:
+      Accept: application/json, text/plain, */*
+      Content-Type: application/json;charset=UTF-8
+      Origin: https://www.crecgec.com
+      Referer: https://www.crecgec.com/portal/
+    params:
+      searchText: ""
+      signId: crecspider
+    timeout_seconds: 40
+    retries: 2
+    retry_backoff_seconds: 0.8
+    verify_ssl: false
+
+  pagination:
+    mode: url_template
+    start_page: 1
+    end_page: 3
+    url_template: "https://www.crecgec.com/portal/crec-portal/portal/historyNotice?pageNo={page}&queryName=noticeEx&pageSize=20&signId=crecspider"
+
+  crypto:
+    enabled: false
+
+  cookie:
+    enabled: false
+
+  detail_request:
+    # 该站历史公告没有可打开的正文页：前端列表行没有 <a href>，点击不下钻，
+    # 且 /historyNotice/{tid}、/historyNotice/detail/{tid}、/portal/notice/{tid}
+    # 一律返回 "{}" 或「公告不存在。」。
+    # 因此详情仍打同一个归档接口（服务端按 pageNo 分页、忽略多余的查询参数）；
+    # {value}/{link} 会被引擎替换成列表项的 raw_url（即 tid）。
+    method: POST
+    # 服务端对重复查询参数取**第一个** pageSize，因此这里先写 pageSize=1，
+    # 引擎随后追加的 site.request.params(pageSize=20) 会被忽略 → 详情只返回 1 条。
+    url_template: "https://www.crecgec.com/portal/crec-portal/portal/historyNotice?queryName=noticeEx&pageSize=1&pageNo=1&signId=crecspider&searchText="
+
+  dedup:
+    redis_hash_key: zhaobiao:domian:linkqc
+    ttl_days: 30
+    prune_probability: 0.01
+
+  list_extraction:
+    response_html_selectors: []
+    item_selectors:
+      - kind: jsonpath
+        expr: $.data.list[*]
+    link_selectors:
+      - kind: jsonpath
+        expr: $.tid
+    title_selectors:
+      - kind: jsonpath
+        expr: $.noticetitle
+    date_selectors:
+      - kind: jsonpath
+        expr: $.pubtime
+    area_selectors:
+      - kind: jsonpath
+        expr: $.area
+    detail_url_template: "https://www.crecgec.com/portal/#/service/search?queryName=noticeEx&tid={tid}"
+    min_title_length: 5
+    fallback_auto: false
+
+  detail_extraction:
+    response_html_selectors: []
+    content_selectors:
+      - kind: regex
+        expr: '"(?:noticetitle|noticetypename|rfqcode|pubtime|area|purcompanyname|organizationalname)":"[^"]*"'
+    # 详情响应恒定（同一条归档记录），所以标题/日期一律不从这里取，
+    # 否则会把所有记录的日期覆盖成同一个值；留空即由引擎回退到列表项自身的值。
+    title_selectors: []
+    date_selectors: []
+    fallback_auto: false
+    fallback_readability: false
+    min_content_length: 2
+
+  attachments:
+    enabled: false
+
+  classification:
+    # 澄清补遗属于招标/采购类
+    default_type: zhaobiao
+    zhongbiao_keywords: []
+
+  area_extraction:
+    enabled: true
+    use_title_first: true
+
+  output:
+    enabled: true
+    queue_zhaobiao: zhaobiao:result:zhaobiao
+    queue_zhongbiao: zhaobiao:result:zhongbiao
+    attachment_dir_zhaobiao: /root/pachong/zhaobiao/data/附件
+    attachment_dir_zhongbiao: /root/pachong/zhaobiao/data_zb/附件
+
+- id: crec_luban_zbgs
+  enabled: false
+  name: 中铁鲁班商务网-历史公告-中标公示
+  entry_urls:
+    - https://www.crecgec.com/portal/crec-portal/portal/historyNotice
+
+  schedule:
+    enabled: true
+    interval_seconds: 3600
+
+  limits:
+    max_concurrency: 3
+    request_interval_seconds: 0.4
+
+  request:
+    method: POST
+    headers:
+      Accept: application/json, text/plain, */*
+      Content-Type: application/json;charset=UTF-8
+      Origin: https://www.crecgec.com
+      Referer: https://www.crecgec.com/portal/
+    params:
+      searchText: ""
+      signId: crecspider
+    timeout_seconds: 40
+    retries: 2
+    retry_backoff_seconds: 0.8
+    verify_ssl: false
+
+  pagination:
+    mode: url_template
+    start_page: 1
+    end_page: 3
+    url_template: "https://www.crecgec.com/portal/crec-portal/portal/historyNotice?pageNo={page}&queryName=bidNotice&pageSize=20&signId=crecspider"
+
+  crypto:
+    enabled: false
+
+  cookie:
+    enabled: false
+
+  detail_request:
+    # 该站历史公告没有可打开的正文页：前端列表行没有 <a href>，点击不下钻，
+    # 且 /historyNotice/{tid}、/historyNotice/detail/{tid}、/portal/notice/{tid}
+    # 一律返回 "{}" 或「公告不存在。」。
+    # 因此详情仍打同一个归档接口（服务端按 pageNo 分页、忽略多余的查询参数）；
+    # {value}/{link} 会被引擎替换成列表项的 raw_url（即 tid）。
+    method: POST
+    # 服务端对重复查询参数取**第一个** pageSize，因此这里先写 pageSize=1，
+    # 引擎随后追加的 site.request.params(pageSize=20) 会被忽略 → 详情只返回 1 条。
+    url_template: "https://www.crecgec.com/portal/crec-portal/portal/historyNotice?queryName=bidNotice&pageSize=1&pageNo=1&signId=crecspider&searchText="
+
+  dedup:
+    redis_hash_key: zhaobiao:domian:linkqc
+    ttl_days: 30
+    prune_probability: 0.01
+
+  list_extraction:
+    response_html_selectors: []
+    item_selectors:
+      - kind: jsonpath
+        expr: $.data.list[*]
+    link_selectors:
+      - kind: jsonpath
+        expr: $.tid
+    title_selectors:
+      - kind: jsonpath
+        expr: $.noticetitle
+    date_selectors:
+      - kind: jsonpath
+        expr: $.pubtime
+    area_selectors:
+      - kind: jsonpath
+        expr: $.area
+    detail_url_template: "https://www.crecgec.com/portal/#/service/search?queryName=bidNotice&tid={tid}"
+    min_title_length: 5
+    fallback_auto: false
+
+  detail_extraction:
+    response_html_selectors: []
+    content_selectors:
+      - kind: regex
+        expr: '"(?:noticetitle|noticetypename|rfqcode|pubtime|area|purcompanyname|organizationalname)":"[^"]*"'
+    # 详情响应恒定（同一条归档记录），所以标题/日期一律不从这里取，
+    # 否则会把所有记录的日期覆盖成同一个值；留空即由引擎回退到列表项自身的值。
+    title_selectors: []
+    date_selectors: []
+    fallback_auto: false
+    fallback_readability: false
+    min_content_length: 2
+
+  attachments:
+    enabled: false
+
+  classification:
+    # 栏目固定为中标/结果公示
+    default_type: zhongbiao
+    zhongbiao_keywords: []
+
+  area_extraction:
+    enabled: true
+    use_title_first: true
+
+  output:
+    enabled: true
+    queue_zhaobiao: zhaobiao:result:zhaobiao
+    queue_zhongbiao: zhaobiao:result:zhongbiao
+    attachment_dir_zhaobiao: /root/pachong/zhaobiao/data/附件
+    attachment_dir_zhongbiao: /root/pachong/zhaobiao/data_zb/附件
+
+- id: crec_luban_hggysz
+  enabled: false
+  name: 中铁鲁班商务网-历史公告-合格供应商招募
+  entry_urls:
+    - https://www.crecgec.com/portal/crec-portal/portal/historyNotice
+
+  schedule:
+    enabled: true
+    interval_seconds: 3600
+
+  limits:
+    max_concurrency: 3
+    request_interval_seconds: 0.4
+
+  request:
+    method: POST
+    headers:
+      Accept: application/json, text/plain, */*
+      Content-Type: application/json;charset=UTF-8
+      Origin: https://www.crecgec.com
+      Referer: https://www.crecgec.com/portal/
+    params:
+      searchText: ""
+      signId: crecspider
+    timeout_seconds: 40
+    retries: 2
+    retry_backoff_seconds: 0.8
+    verify_ssl: false
+
+  pagination:
+    mode: url_template
+    start_page: 1
+    end_page: 3
+    url_template: "https://www.crecgec.com/portal/crec-portal/portal/historyNotice?pageNo={page}&queryName=supplierNotice&pageSize=20&signId=crecspider"
+
+  crypto:
+    enabled: false
+
+  cookie:
+    enabled: false
+
+  detail_request:
+    # 该站历史公告没有可打开的正文页：前端列表行没有 <a href>，点击不下钻，
+    # 且 /historyNotice/{tid}、/historyNotice/detail/{tid}、/portal/notice/{tid}
+    # 一律返回 "{}" 或「公告不存在。」。
+    # 因此详情仍打同一个归档接口（服务端按 pageNo 分页、忽略多余的查询参数）；
+    # {value}/{link} 会被引擎替换成列表项的 raw_url（即 tid）。
+    method: POST
+    # 服务端对重复查询参数取**第一个** pageSize，因此这里先写 pageSize=1，
+    # 引擎随后追加的 site.request.params(pageSize=20) 会被忽略 → 详情只返回 1 条。
+    url_template: "https://www.crecgec.com/portal/crec-portal/portal/historyNotice?queryName=supplierNotice&pageSize=1&pageNo=1&signId=crecspider&searchText="
+
+  dedup:
+    redis_hash_key: zhaobiao:domian:linkqc
+    ttl_days: 30
+    prune_probability: 0.01
+
+  list_extraction:
+    response_html_selectors: []
+    item_selectors:
+      - kind: jsonpath
+        expr: $.data.list[*]
+    link_selectors:
+      - kind: jsonpath
+        expr: $.tid
+    title_selectors:
+      - kind: jsonpath
+        expr: $.noticetitle
+    date_selectors:
+      - kind: jsonpath
+        expr: $.pubtime
+    area_selectors:
+      - kind: jsonpath
+        expr: $.area
+    detail_url_template: "https://www.crecgec.com/portal/#/service/search?queryName=supplierNotice&tid={tid}"
+    min_title_length: 5
+    fallback_auto: false
+
+  detail_extraction:
+    response_html_selectors: []
+    content_selectors:
+      - kind: regex
+        expr: '"(?:noticetitle|noticetypename|rfqcode|pubtime|area|purcompanyname|organizationalname)":"[^"]*"'
+    # 详情响应恒定（同一条归档记录），所以标题/日期一律不从这里取，
+    # 否则会把所有记录的日期覆盖成同一个值；留空即由引擎回退到列表项自身的值。
+    title_selectors: []
+    date_selectors: []
+    fallback_auto: false
+    fallback_readability: false
+    min_content_length: 2
+
+  attachments:
+    enabled: false
+
+  classification:
+    # 供应商招募属于招标/征集类
+    default_type: zhaobiao
+    zhongbiao_keywords: []
+
+  area_extraction:
+    enabled: true
+    use_title_first: true
+
+  output:
+    enabled: true
+    queue_zhaobiao: zhaobiao:result:zhaobiao
+    queue_zhongbiao: zhaobiao:result:zhongbiao
+    attachment_dir_zhaobiao: /root/pachong/zhaobiao/data/附件
+    attachment_dir_zhongbiao: /root/pachong/zhaobiao/data_zb/附件
+
+- id: crec_luban_jjcg
+  enabled: false
+  name: 中铁鲁班商务网-历史公告-竞价采购
+  entry_urls:
+    - https://www.crecgec.com/portal/crec-portal/portal/historyNotice
+
+  schedule:
+    enabled: true
+    interval_seconds: 3600
+
+  limits:
+    max_concurrency: 3
+    request_interval_seconds: 0.4
+
+  request:
+    method: POST
+    headers:
+      Accept: application/json, text/plain, */*
+      Content-Type: application/json;charset=UTF-8
+      Origin: https://www.crecgec.com
+      Referer: https://www.crecgec.com/portal/
+    params:
+      searchText: ""
+      signId: crecspider
+    timeout_seconds: 40
+    retries: 2
+    retry_backoff_seconds: 0.8
+    verify_ssl: false
+
+  pagination:
+    mode: url_template
+    start_page: 1
+    end_page: 3
+    url_template: "https://www.crecgec.com/portal/crec-portal/portal/historyNotice?pageNo={page}&queryName=cqNotice&pageSize=20&signId=crecspider"
+
+  crypto:
+    enabled: false
+
+  cookie:
+    enabled: false
+
+  detail_request:
+    # 该站历史公告没有可打开的正文页：前端列表行没有 <a href>，点击不下钻，
+    # 且 /historyNotice/{tid}、/historyNotice/detail/{tid}、/portal/notice/{tid}
+    # 一律返回 "{}" 或「公告不存在。」。
+    # 因此详情仍打同一个归档接口（服务端按 pageNo 分页、忽略多余的查询参数）；
+    # {value}/{link} 会被引擎替换成列表项的 raw_url（即 tid）。
+    method: POST
+    # 服务端对重复查询参数取**第一个** pageSize，因此这里先写 pageSize=1，
+    # 引擎随后追加的 site.request.params(pageSize=20) 会被忽略 → 详情只返回 1 条。
+    url_template: "https://www.crecgec.com/portal/crec-portal/portal/historyNotice?queryName=cqNotice&pageSize=1&pageNo=1&signId=crecspider&searchText="
+
+  dedup:
+    redis_hash_key: zhaobiao:domian:linkqc
+    ttl_days: 30
+    prune_probability: 0.01
+
+  list_extraction:
+    response_html_selectors: []
+    item_selectors:
+      - kind: jsonpath
+        expr: $.data.list[*]
+    link_selectors:
+      - kind: jsonpath
+        expr: $.tid
+    title_selectors:
+      - kind: jsonpath
+        expr: $.noticetitle
+    date_selectors:
+      - kind: jsonpath
+        expr: $.pubtime
+    area_selectors:
+      - kind: jsonpath
+        expr: $.area
+    detail_url_template: "https://www.crecgec.com/portal/#/service/search?queryName=cqNotice&tid={tid}"
+    min_title_length: 5
+    fallback_auto: false
+
+  detail_extraction:
+    response_html_selectors: []
+    content_selectors:
+      - kind: regex
+        expr: '"(?:noticetitle|noticetypename|rfqcode|pubtime|area|purcompanyname|organizationalname)":"[^"]*"'
+    # 详情响应恒定（同一条归档记录），所以标题/日期一律不从这里取，
+    # 否则会把所有记录的日期覆盖成同一个值；留空即由引擎回退到列表项自身的值。
+    title_selectors: []
+    date_selectors: []
+    fallback_auto: false
+    fallback_readability: false
+    min_content_length: 2
+
+  attachments:
+    enabled: false
+
+  classification:
+    # 竞价采购属于采购（招标）类
+    default_type: zhaobiao
+    zhongbiao_keywords: []
+
+  area_extraction:
+    enabled: true
+    use_title_first: true
+
+  output:
+    enabled: true
+    queue_zhaobiao: zhaobiao:result:zhaobiao
+    queue_zhongbiao: zhaobiao:result:zhongbiao
+    attachment_dir_zhaobiao: /root/pachong/zhaobiao/data/附件
+    attachment_dir_zhongbiao: /root/pachong/zhaobiao/data_zb/附件

@@ -99,6 +99,7 @@ class AttachmentDownloader(object):
             # 文件名优先级：配置的 filename_selectors > 响应 Content-Disposition > URL 末段
             response_name = self._filename_from_headers(response.headers)
             filename = self._build_filename(url, name or response_name)
+            filename = self._ensure_extension(filename, response.content)
 
             file_path = root_path / filename
             with file_path.open("wb") as f:
@@ -125,6 +126,40 @@ class AttachmentDownloader(object):
             total_urls=len(attachment_urls),
         )
         return output_files
+
+    # 已知扩展名（命中则不按文件头改写）与文件头 → 扩展名映射
+    _KNOWN_EXTENSIONS = frozenset([
+        ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".zip", ".rar", ".7z",
+        ".txt", ".csv", ".xml", ".json", ".html", ".htm", ".png", ".jpg", ".jpeg", ".gif", ".bmp",
+    ])
+    _MAGIC_EXTENSIONS = (
+        (b"%PDF-", ".pdf"),
+        (b"PK\x03\x04", ".zip"),
+        (b"\xd0\xcf\x11\xe0", ".doc"),
+        (b"Rar!\x1a\x07", ".rar"),
+        (b"7z\xbc\xaf\x27\x1c", ".7z"),
+        (b"\x89PNG\r\n", ".png"),
+        (b"\xff\xd8\xff", ".jpg"),
+        (b"GIF87a", ".gif"),
+        (b"GIF89a", ".gif"),
+        (b"BM", ".bmp"),
+    )
+
+    @classmethod
+    def _ensure_extension(cls, filename, content):
+        # type: (str, bytes) -> str
+        """附件 URL/响应头给不出可识别扩展名时（如 .../openFileById.do、downfile.jsp），
+        按响应内容的文件头补上正确扩展名，方便下游按类型处理。"""
+        base, ext = os.path.splitext(filename or "")
+        if ext.lower() in cls._KNOWN_EXTENSIONS:
+            return filename
+        if not content:
+            return filename
+        head = content[:16]
+        for magic, suffix in cls._MAGIC_EXTENSIONS:
+            if head.startswith(magic):
+                return (base or filename) + suffix
+        return filename
 
     @staticmethod
     def _encode_url(url):
