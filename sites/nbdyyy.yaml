@@ -1,0 +1,316 @@
+# 宁波大学附属第一医院官网（www.nbdyyy.com）——「公示信息」板块下的招标/中标栏目
+#
+# 站点性质：浙江政务服务网风格的**大汉版通（Hanweb）静态 CMS**。
+#   - 栏目页 URL 形如 /col/col{栏目id}/index.html，详情页 /art/YYYY/M/D/art_{栏目id}_{文章id}.html
+#   - 纯服务端渲染 HTML，无 JS 渲染、无需登录、无加密参数，直连 200，响应 UTF-8。
+#
+# 「公示信息」（/col/col16278/index.html）下 5 个子栏目：
+#   col16284 采购公示   → 本文件 nbdyyy_cggs（zhaobiao）
+#   col16285 中标公告   → 本文件 nbdyyy_zbgg（zhongbiao）
+#   col16280 人事招聘 / col16288 特需服务 / col16289 预决算公开 → 非招标类，不配置
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# 关键发现 1：栏目页只是「第 1 页的 45 条」，真正的全量列表在 dataproxy 接口里
+# ─────────────────────────────────────────────────────────────────────────────
+# /col/col16284/index.html 静态文件里只内嵌 45 条 <li>，而且 index_1.html / index_2.html
+# 全部 404、页面上也没有任何分页控件——单看首页会误判为「无分页、只有 45 条」。
+# 实际首页 HTML 的 <div id="26941"><script type="text/xml"><datastore>…</datastore></script>
+# 里带了一个 <nextgroup>，指向大汉版通的标准列表分页接口：
+#   /module/web/jpage/dataproxy.jsp?page=1&webid=5&path=/&columnid=16284
+#       &unitid=26941&webname=%25E5…&permissiontype=0
+# 实测（2026-09-14 复测，接口自带 totalrecord/totalpage）：
+#   col16284 → totalrecord=980  totalpage=10
+#   col16285 → totalrecord=844  totalpage=9
+#   超出末页（如 page=11 / page=20）→ HTTP 200 + `<datastore></datastore>`（74 字节空体），
+#   不报错、也不重复返回数据，所以 end_page 直接取 totalpage 即可，多取一页也安全。
+#
+# ★ 这个接口不是「一页 45 条」，而是**每页返回 301 条的重叠窗口**（起点 ≈ (page-1)×100）：
+#     page1 覆盖 2026-09-10…2024-07-05，page2 覆盖 2025-12-04…2023-09-07，
+#     page3 覆盖 2025-02-06…2022-10-25 ……
+#   相邻页重叠 201 / 101 条，page4 起基本不重叠。实测 col16284 的 page1..page10
+#   **并集去重后正好 980 条 = totalrecord**，col16285 的 page1..page9 并集 = 844 条 = totalrecord，
+#   即 end_page=totalpage 能覆盖栏目全部文章，一条不漏。
+#   由于窗口大量重叠，**必需依赖框架按 URL 去重**（list_extractor 内部 dedup + 引擎的
+#   queued_detail_urls），否则同一篇会被反复抓取。pagesize/rows/perpage/recordcount
+#   /startrecord 等参数实测均被服务端忽略，无法把窗口调小，只能接受这份冗余。
+#   注意：本框架的 mode:url_template 不校验 http 状态就信任页数，若将来 totalpage 增长，
+#   需要同步调大 end_page（超出末页只会拿到空 <datastore>，不会误抓）。
+# 因此这里用 pagination.mode: url_template（page 从 1 起，正好对齐 totalpage），
+# 而不是 mode: none —— 否则每个栏目只能抓到首页 45 条，会漏掉 95% 的历史公告。
+#
+# 接口响应体是「XML 包 HTML 片段」：
+#   <datastore><totalrecord>…</totalrecord><totalpage>…</totalpage>
+#   <recordset><record><![CDATA[<li><a href="/art/…" title="…">…</a><span>2026-09-10</span></li>]]></record>
+#   …</recordset></datastore>
+# 故用 list_extraction.response_html_selectors: regex 先剥出 <recordset>…</recordset>，
+# 框架会把这段字符串重新解析成 HTML，然后再跑 item/link/title/date 选择器。
+# （注意 regex 是 re.S 且 findall，元素取「第一个非空」= 第一个 <recordset>，不会跨页串味。）
+#
+# ★ 这里有个反直觉的坑：**item_selectors 不能用 //li**
+#   大汉把每条记录的 <li> 包进了 <record><![CDATA[…]]></record>。lxml(libxml2) 的 HTML 解析器
+#   遇到这种「未知标签 + CDATA」时，会把 CDATA 里的 <a>/<span> 当真实节点解析出来，
+#   却把最外层那个 <li> 丢掉（实测 301 条记录 → //a 命中 301、//li 命中 0）。
+#   所以 item_selectors 用 //record：每条 <record> 正好对应一条列表记录，
+#   再在其内部用相对 XPath 取 .//a/@href 与 .//a/@title（属性这里没有丢），
+#   日期取 .//span//text()。
+#   （已实测对比 4 种写法：//record 与 //a/.. 都能稳定取到 45 条/页且无 CDATA 残渣；
+#     //li 两种写法都返回 0 条。）
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# 关键发现 2：详情页正文容器是 div.article_cont（不是 class="content"）
+# ─────────────────────────────────────────────────────────────────────────────
+# 详情页里 class 含 "content" 的只有侧边栏 <div id="sub_nav_content" style="display:none">
+# （导航菜单，选它正文就全错），真正正文是同级的 <div class="article_cont">，
+# 内容由 Word 另存而来（大量行内 style 的 <table>/<p>，外面还包了
+# <!--ZJEG_RSS.content.begin--><meta name="ContentStart"/> 注释与 meta）。
+# 标题：<div class="f_title color03">完整标题</div>
+#   （<title> 是「站名 + 栏目名 + 文章标题」拼接，不能直接用；列表页 a@title 已是完整标题，
+#     详情页标题仅作为回填兜底）
+# 日期：<li class="color04 …">时间：2026-09-11</li>，用 regex 从原始响应里取。
+#
+# ★ 全量实测（980 + 844 条）里有一批「图片版扫描公告」：正文容器 article_cont 里
+#   只有一张 <img src="/UploadFile/…jpeg">（整页扫描件），没有任何文字。这类页面
+#   article_cont 的可见文本长度为 0，会触发 fallback_auto → 抽到「当前位置：首页 公示信息…
+#   阅读：时间：…发布：」这段页面壳文本（约 90~120 字）。实测 col16284 有 26 条、
+#   col16285 有 11 条属于这种情况。两个选择：
+#     a) 保留 fallback_auto（当前配置）→ 这 37 条仍能产出记录（标题/时间/链接/图片全部正确，
+#        只是正文是一小段栏目导航文字），但不会被判为「正文为空」而丢弃；
+#     b) 关掉 fallback_auto → 这 37 条会以 content_too_short 失败、整个记录丢失。
+#   因为这些都是真正的招标/中标公告（正文是扫描图，人眼在原文页可见），选 a 保留记录。
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# 关键发现 3：附件走 /module/download/downfile.jsp，URL 无真实后缀
+# ─────────────────────────────────────────────────────────────────────────────
+# 采购公示详情页正文里普遍带 1 个附件（院内议价和询价文件），形如：
+#   /module/download/downfile.jsp?classid=0
+#       &showname=%E9%99%84%E4%BB%B61%EF%BC%9A…%EF%BC%882026.09.16%EF%BC%89.zip
+#       &filename=a040b74638094620ae7ccc453e762232.zip
+# 已实测匿名下载：HTTP 200，Content-Disposition 带 URL 编码的中文真实文件名，
+# 内容是真的 PK zip 包（454981 字节）→ 用框架内置的「按 Content-Disposition 命名」即可，
+# 不需要 filename_selectors（且该字段与 selectors 按位置对齐，正文里还混有
+# creditchina.gov.cn / isap.nbdyyy.com 等外链，配了必然错位）。
+# 注意 URL 的 path 结尾是 32 位 hex（filename 参数值）而**不是** .zip，
+# 框架的 allowed_extensions 判的是整条 URL 的 endswith，会把这些附件全部过滤掉，
+# 所以 allowed_extensions 必须留空；靠 regex 精确命中 downfile.jsp 来挡掉外链噪音。
+
+- id: nbdyyy_cggs
+  enabled: true
+  name: 宁波大学附属第一医院-采购公示
+  entry_urls:
+    # 栏目页本身只作占位/Referer 语义（url_template 模式下不发请求，page 由模板生成）
+    - http://www.nbdyyy.com/col/col16284/index.html
+
+  schedule:
+    enabled: true
+    interval_seconds: 3600
+
+  limits:
+    max_concurrency: 3
+    request_interval_seconds: 0.5
+
+  request:
+    method: GET
+    headers:
+      Referer: http://www.nbdyyy.com/col/col16284/index.html
+      Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8
+    params: {}
+    timeout_seconds: 40
+    retries: 2
+    retry_backoff_seconds: 0.8
+    verify_ssl: false
+
+  pagination:
+    # 大汉版通 dataproxy 分页接口；page 从 1 开始，totalpage=10
+    mode: url_template
+    start_page: 1
+    end_page: 10
+    url_template: "http://www.nbdyyy.com/module/web/jpage/dataproxy.jsp?page={page}&webid=5&path=/&columnid=16284&unitid=26941&webname=%25E5%25AE%2581%25E6%25B3%25A2%25E5%25A4%25A7%25E5%25AD%25A6%25E9%2599%2584%25E5%25B1%259E%25E7%25AC%25AC%25E4%25B8%2580%25E5%258C%25BB%25E9%2599%25A2%25E5%25AE%2598%25E7%25BD%2591&permissiontype=0"
+
+  crypto:
+    enabled: false
+
+  cookie:
+    # 实测匿名直连 dataproxy 即可拿到 totalpage/totalrecord，无需 Cookie；
+    # 若将来被 BIG-IP 会话粘住，再开 cookie + 从栏目页取 BIGipServerpublic-diyiyiyuan-80-pool。
+    enabled: false
+
+  dedup:
+    redis_hash_key: zhaobiao:domian:linkqc
+    ttl_days: 30
+    prune_probability: 0.01
+
+  list_extraction:
+    # 接口是 XML 包 HTML 片段，先剥出 <recordset> 再交给 HTML 解析器
+    response_html_selectors:
+      - kind: regex
+        expr: "(<recordset>.*?</recordset>)"
+    item_selectors:
+      # 不能用 //li：CDATA 包裹时 libxml2 会把 <li> 丢掉（详见文件头说明），//record 才是每条记录
+      - kind: xpath
+        expr: //record
+    link_selectors:
+      - kind: xpath
+        expr: .//a/@href
+    title_selectors:
+      # a@title 是完整标题（列表可见文本未截断，两者一致，@title 更稳）
+      - kind: xpath
+        expr: .//a/@title
+      - kind: xpath
+        expr: .//a//text()
+    date_selectors:
+      - kind: xpath
+        expr: .//span//text()
+    min_title_length: 6
+    fallback_auto: false
+
+  detail_extraction:
+    response_html_selectors: []
+    content_selectors:
+      # 正文容器；别选 //div[contains(@class,"content")]（那是隐藏侧栏 sub_nav_content）
+      - kind: xpath
+        expr: //div[contains(@class, "article_cont")]
+    title_selectors:
+      # 详情页完整标题；列表标题本就完整，这里只作回填兜底
+      - kind: xpath
+        expr: //div[contains(@class, "f_title")]//text()
+    date_selectors:
+      # 「时间：2026-09-11」（针对原始响应取）
+      - kind: regex
+        expr: "时间：\\s*(\\d{4}-\\d{1,2}-\\d{1,2})"
+    fallback_auto: true
+    fallback_readability: true
+    min_content_length: 30
+
+  attachments:
+    enabled: true
+    # 只命中站内附件下载接口，挡掉正文里的 creditchina.gov.cn / isap.nbdyyy.com 等外链
+    selectors:
+      - kind: regex
+        expr: "(/module/download/downfile\\.jsp\\?[^\"'<> ]+)"
+    # 不配 filename_selectors：与 selectors 按位置对齐，正文混有外链会错位；
+    # 留空则由框架从响应 Content-Disposition 还原中文真实文件名。
+    allowed_extensions: []
+    max_bytes: 52428800
+
+  classification:
+    # 采购公示栏目固定为招标/询价/议价类公告，栏目即分类，不做关键词分流
+    default_type: zhaobiao
+    zhongbiao_keywords: []
+
+  area_extraction:
+    # 固定浙江宁波，直接用 fixed_value（优先级最高，比 use_title_first 的自动归并更确定）
+    enabled: true
+    fixed_value: 浙江
+
+  output:
+    enabled: true
+    queue_zhaobiao: zhaobiao:result:zhaobiao
+    queue_zhongbiao: zhaobiao:result:zhongbiao
+    attachment_dir_zhaobiao: /root/pachong/zhaobiao/data/附件
+    attachment_dir_zhongbiao: /root/pachong/zhaobiao/data_zb/附件
+
+- id: nbdyyy_zbgg
+  enabled: true
+  name: 宁波大学附属第一医院-中标公告
+  entry_urls:
+    - http://www.nbdyyy.com/col/col16285/index.html
+
+  schedule:
+    enabled: true
+    interval_seconds: 3600
+
+  limits:
+    max_concurrency: 3
+    request_interval_seconds: 0.5
+
+  request:
+    method: GET
+    headers:
+      Referer: http://www.nbdyyy.com/col/col16285/index.html
+      Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8
+    params: {}
+    timeout_seconds: 40
+    retries: 2
+    retry_backoff_seconds: 0.8
+    verify_ssl: false
+
+  pagination:
+    # col16285 的 totalpage=9（totalrecord=844）；page=10 起返回 200 + 空 datastore
+    mode: url_template
+    start_page: 1
+    end_page: 9
+    url_template: "http://www.nbdyyy.com/module/web/jpage/dataproxy.jsp?page={page}&webid=5&path=/&columnid=16285&unitid=26941&webname=%25E5%25AE%2581%25E6%25B3%25A2%25E5%25A4%25A7%25E5%25AD%25A6%25E9%2599%2584%25E5%25B1%259E%25E7%25AC%25AC%25E4%25B8%2580%25E5%258C%25BB%25E9%2599%25A2%25E5%25AE%2598%25E7%25BD%2591&permissiontype=0"
+
+  crypto:
+    enabled: false
+
+  cookie:
+    enabled: false
+
+  dedup:
+    redis_hash_key: zhaobiao:domian:linkqc
+    ttl_days: 30
+    prune_probability: 0.01
+
+  list_extraction:
+    response_html_selectors:
+      - kind: regex
+        expr: "(<recordset>.*?</recordset>)"
+    item_selectors:
+      # 不能用 //li：CDATA 包裹时 libxml2 会把 <li> 丢掉（详见文件头说明），//record 才是每条记录
+      - kind: xpath
+        expr: //record
+    link_selectors:
+      - kind: xpath
+        expr: .//a/@href
+    title_selectors:
+      - kind: xpath
+        expr: .//a/@title
+      - kind: xpath
+        expr: .//a//text()
+    date_selectors:
+      - kind: xpath
+        expr: .//span//text()
+    min_title_length: 6
+    fallback_auto: false
+
+  detail_extraction:
+    response_html_selectors: []
+    content_selectors:
+      - kind: xpath
+        expr: //div[contains(@class, "article_cont")]
+    title_selectors:
+      - kind: xpath
+        expr: //div[contains(@class, "f_title")]//text()
+    date_selectors:
+      - kind: regex
+        expr: "时间：\\s*(\\d{4}-\\d{1,2}-\\d{1,2})"
+    fallback_auto: true
+    fallback_readability: true
+    min_content_length: 30
+
+  attachments:
+    # 中标公告正文是纯表格（标项号/子包号/项目名称/数量/中标单位），实测无附件下载链接；
+    # 保留 selectors 以防将来改版补发附件，仍不让外链噪音进入下载流程。
+    enabled: true
+    selectors:
+      - kind: regex
+        expr: "(/module/download/downfile\\.jsp\\?[^\"'<> ]+)"
+    allowed_extensions: []
+    max_bytes: 52428800
+
+  classification:
+    # 中标公告栏目固定为结果类公告（结果公示/中标(成交)结果公告），栏目即分类
+    default_type: zhongbiao
+    zhongbiao_keywords: []
+
+  area_extraction:
+    enabled: true
+    fixed_value: 浙江
+
+  output:
+    enabled: true
+    queue_zhaobiao: zhaobiao:result:zhaobiao
+    queue_zhongbiao: zhaobiao:result:zhongbiao
+    attachment_dir_zhaobiao: /root/pachong/zhaobiao/data/附件
+    attachment_dir_zhongbiao: /root/pachong/zhaobiao/data_zb/附件
