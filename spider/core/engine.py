@@ -3,6 +3,7 @@ import datetime as dt
 import hashlib
 import json
 import logging
+import re
 import urllib.parse
 import uuid
 from pathlib import Path
@@ -78,6 +79,8 @@ class SpiderEngine(object):
         self.cookie_provider = RedisCookieProvider(self.redis)
         self.publisher = RedisPublisher(self.redis)
         self.circuit_state = {}  # type: Dict[str, CircuitState]
+        # token_bootstrap 的缓存：site_id -> 令牌（同一轮内只抓一次）
+        self._token_cache = {}  # type: Dict[str, str]
 
     async def aclose(self):
         # type: () -> None
@@ -100,6 +103,62 @@ class SpiderEngine(object):
             result[site.id] = await self.run_site(site.id)
         return result
 
+    def _headers_with_token(self, site, base_headers):
+        # type: (SiteConfig, Optional[Dict[str, str]]) -> Dict[str, str]
+        """把 token_bootstrap 取到的令牌合并进请求头（未配置/未取到则原样返回）。"""
+        headers = dict(base_headers or {})
+        cfg = getattr(site.request, "token_bootstrap", None)
+        token = self._token_cache.get(site.id) if cfg is not None else ""
+        if token:
+            headers[cfg.header] = token
+        return headers
+
+    async def _load_site_token(self, site, cookie):
+        # type: (SiteConfig, Optional[str]) -> str
+        """按 request.token_bootstrap 配置抓取一次令牌（每站点每轮只抓一次，结果缓存）。"""
+        cfg = getattr(site.request, "token_bootstrap", None)
+        if cfg is None:
+            return ""
+        cached = self._token_cache.get(site.id)
+        if cached is not None:
+            return cached
+
+        token = ""
+        try:
+            req = FetchRequest(
+                url=cfg.url,
+                method=cfg.method or "GET",
+                headers=dict(site.request.headers),
+                timeout_seconds=site.request.timeout_seconds,
+                retries=site.request.retries,
+                retry_backoff_seconds=site.request.retry_backoff_seconds,
+                verify_ssl=site.request.verify_ssl,
+            )
+            resp = await self.fetcher.fetch(req, cookie=cookie)
+            match = re.search(cfg.expr, resp.text or "", flags=re.S)
+            if match:
+                token = (match.group(1) if match.groups() else match.group(0)).strip()
+            log_event(
+                self.logger,
+                logging.INFO if token else logging.WARNING,
+                "site.token_bootstrap.done",
+                site_id=site.id,
+                url=cfg.url,
+                status_code=resp.status_code,
+                token_loaded=bool(token),
+            )
+        except Exception as exc:
+            log_event(
+                self.logger,
+                logging.WARNING,
+                "site.token_bootstrap.failed",
+                site_id=site.id,
+                url=cfg.url,
+                error=str(exc),
+            )
+        self._token_cache[site.id] = token
+        return token
+
     async def run_site(self, site_id, override_entry_urls=None):
         # type: (str, Optional[List[str]]) -> SiteMetrics
         site = self._get_site(site_id)
@@ -121,7 +180,15 @@ class SpiderEngine(object):
         limiter = SiteRateLimiter(site.limits.request_interval_seconds)
 
         entry_urls = override_entry_urls or site.entry_urls
+        # 令牌自举：部分站点（如 Laravel/CSRF 保护的 AJAX 接口）要求请求头带一次性令牌，
+        # 启动时先抓一次页面、从响应里抽出令牌供本轮所有请求使用（会话 Cookie 由 CookieJar 自动维护）。
+        site_token = await self._load_site_token(site, cookie)
         request_tasks = build_list_request_tasks(entry_urls, site.request, site.pagination)
+        if site_token:
+            token_header = site.request.token_bootstrap.header
+            for task in request_tasks:
+                task.headers = dict(task.headers or {})
+                task.headers[token_header] = site_token
 
         # 通过队列把列表抓取与详情 worker 解耦，列表页产出后即可继续并发消费详情。
         detail_queue = asyncio.Queue()
@@ -301,7 +368,7 @@ class SpiderEngine(object):
             req = FetchRequest(
                 url=detail_url,
                 method=detail_method,
-                headers=site.request.headers,
+                headers=self._headers_with_token(site, site.request.headers),
                 data=detail_data,
                 json=detail_json,
                 timeout_seconds=site.request.timeout_seconds,
@@ -430,7 +497,7 @@ class SpiderEngine(object):
                     pdf_req = FetchRequest(
                         url=pdf_detection.pdf_url,
                         method="GET",
-                        headers=dict({"Referer": item.url}, **site.request.headers),
+                        headers=self._headers_with_token(site, dict({"Referer": item.url}, **site.request.headers)),
                         timeout_seconds=site.request.timeout_seconds,
                         retries=site.request.retries,
                         retry_backoff_seconds=site.request.retry_backoff_seconds,

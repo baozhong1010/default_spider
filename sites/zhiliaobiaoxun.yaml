@@ -1,0 +1,214 @@
+# =============================================================================
+# 知了标讯 - 上海地区 - 信息技术频道（https://sh.zhiliaobiaoxun.com/tech）
+#
+# 平台识别
+# -----------------------------------------------------------------------------
+# <title> =「信息技术招标信息 - 知了标讯」；页脚版权「北京百炼智能科技有限公司」，
+# 备案 京ICP备18021895号-11。知了标讯（zhiliaobiaoxun.com）是**第三方招中标信息聚合站**
+# （不自营交易，只抓各地公告再加工展示），按地区划分子域、按行业划分子频道：
+#   地区子域：bj / sh / tj / gd / js / hb / jl / ln / ah .zhiliaobiaoxun.com（页脚「地区」区）
+#   行业频道：/doc（最新） /tech（信息） /office（办公） /project（工程）
+#             /med（医疗） /insure（保险） /wuye（物业） /shebei（设备）
+# 本文件只做任务给定的 **sh 站 /tech（信息技术）频道**。
+#   如需扩到同站其他频道：复制下面整个站点块，改 id 与 /tech 为对应频道路径即可
+#   （8 个频道 HTML 结构完全一致，实测 /office、/med 同构）；扩到其他地区同样只改子域。
+#
+# 可达性与站点性质（实测 2026-09-17，全部直连 curl.exe --noproxy "*"）
+# -----------------------------------------------------------------------------
+#   · 服务端渲染静态 HTML：列表行与分页页码都在首屏 HTML 里，无 AJAX 取列表、无 JS 渲染。
+#   · 匿名可访问：**无登录墙、无验证码、无 Cookie 前置、无 412/瑞数类反爬**；
+#     100 条列表页 + 100 个详情页连续抓取（6 并发）全部 200。
+#   · Server: nginx；列表页约 25.6KB / 0.5s，详情页约 26~27KB / 0.5s；
+#     静态资源在 cdn*.bailian-ai.com 与 cdn.001.bailian-ai.com，与本配置无关。
+#   · TLS：证书链正常（本机 curl 报 CRYPT_E_REVOCATION_OFFLINE 是本机吊销列表离线所致，
+#     加 --ssl-no-revoke 即正常，与站点无关），故 verify_ssl 用框架默认 false。
+#
+# 列表页结构（/tech 与 /tech/N）
+# -----------------------------------------------------------------------------
+#   · 主列表容器：div.article > div.main.r_box > ul > li；每页固定 10 条。
+#   · 每条：h2 > a（href=/article/{id}、标题）＋ <p>（元信息多行）＋ div.postfoot（日期）。
+#   · <p> 元信息是本站最有价值的部分，逐行给出：
+#         项目名称 / 项目编号 / 招标公司 / 中标公司(有则给) / 采购标的物 / 项目地区
+#     其中「中标公司:」是站方已经判定出中标方的**确定性标记**，正文里同样会带这一段，
+#     因此被用作分类的最强特征（见下方 classification）。
+#   · ⚠ 陷阱 1：右侧「热门文章」侧栏用的是 li.widlist，与主列表不是同一容器。
+#     本配置用 div[contains(@class,"r_box")]/ul/li 限定，天然避开侧栏。
+#   · ⚠ 陷阱 2：首页源码里有整块被注释掉的 <li>（<!-- ... -->，约 6 条）。
+#     lxml 建树时注释内元素不会成为节点，故不会被抓成列表项（无需额外处理）。
+#   · ⚠ 陷阱 3：正文尾部有一条站方引流句「免费查看最新招中标公告」（100/100 条都有），
+#     内含「中标公告」字样；不剔除会把**全部记录**判成中标（实测分类准确率掉到 0.660）。
+#     已用 detail_extraction.exclude_selectors 在取正文前整块删除（见下）。
+#
+# 分页（重要：尾页行为是「静默重复」，不是 404）
+# -----------------------------------------------------------------------------
+#   · 页码形式 /tech/{page}，page 从 1 开始（/tech 与 /tech/1 内容一致）。
+#   · 站点页码条只给到 /tech/100（「尾页」），即最多 1000 条。
+#   · 实测 /tech/100 与 /tech/101 **逐字节相同**：超出尾页不报错、不返回空页，
+#     而是把最后一页重复返回（无「空结果」哨兵）。故 end_page 不得超过 100，
+#     否则每轮都会把第 100 页当新数据重抓一遍（有 dedup 兜底，但纯属浪费）。
+#   · 本配置每轮抓前 3 页 = 30 条，新公告从头部插入，靠 dedup 去重实现增量。
+#
+# 详情页结构（/article/{id}）
+# -----------------------------------------------------------------------------
+#   · div.infosbox > div.newsview：h2.news_title 标题、div.bloginfo li.timer 日期、
+#     div.news_con 正文（内部 div#iddahe_com_style_div 装 p.content_p 段落与表格）。
+#   · 「相关推荐」同类推荐列表在 div.related-list 里，**不在 news_con 内**，不会被混入正文。
+#   · 免费版正文有**数字打码**：部分编号/联系方式被替换成「查看完整信息」链接指向
+#     www.zhiliaobiaoxun.com 的 /content/{id}/b2 页（需登录/付费）。属于站方免费版限制，
+#     抓到的即为页面可见内容（合同名称、甲乙方、地址、金额、履约期限等通常是明文）。
+#   · 附件：**没有可下载附件**。100 条详情页扫描 .pdf/.doc/.xls/.zip/下载链接/「附件」链接，
+#     命中 0 条；正文里的「附件信息：* xxx(11N425...).pdf」只是**纯文本文件名**（且被打了码），
+#     不是 <a href>，因此 attachments.enabled: false。
+#     （若开启且不写 selectors，框架会回退成「全页 //a/@href」，
+#      会把「相关推荐」等页面当附件下载，故必须显式关闭。）
+#
+# 分类依据（100 条完整语料实测，非拍脑袋）
+# -----------------------------------------------------------------------------
+#   · /tech 是**行业频道**，招标与中标同栏混发（实测 69 中标 : 31 招标）。
+#   · 关键词表经 100 条语料（10 页列表 + 100 个详情页全文）逐条核对：
+#     准确率 1.000、召回 1.000（TP=69 FP=0 FN=0 TN=31）。
+#   · 刻意**不用**的泛词（实测会误判招标公告）：
+#       「中标」100/100 命中（尾部引流句＋「确定1家中标供应商」等模板话术）；
+#       「中标供应商」误判 5 条（…确定1家中标供应商…）；
+#       「成交供应商」误判 4 条（…成交供应商数量：1 个…）；
+#       「成交公示」误判 1 条（…成交公示结束且无异议的当日24时…）；
+#       「成交结果」误判 1 条（…最终导致项目无成交结果的…）；
+#       「合同名称/合同金额/采购合同」误判 1~2 条（…含合同名称的首页…、…支付 90% 的合同金额…）。
+#     这些词都出现在**招标公告正文的模板/资格条款**里，属未来时态表述，不能当结果特征。
+# =============================================================================
+
+- id: zhiliaobiaoxun_sh_tech
+  enabled: true
+  name: 知了标讯-上海-信息技术频道（招标+中标同栏）
+  entry_urls:
+    - https://sh.zhiliaobiaoxun.com/tech
+
+  schedule:
+    enabled: true
+    interval_seconds: 3600
+
+  limits:
+    # 站点无并发限制迹象（6 并发连抓 200 个页面全部 200），限速仍保守一点
+    max_concurrency: 4
+    request_interval_seconds: 0.3
+
+  request:
+    method: GET
+    headers:
+      Referer: https://sh.zhiliaobiaoxun.com/tech
+      Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8
+      Accept-Language: zh-CN,zh;q=0.9
+    params: {}
+    timeout_seconds: 30
+    retries: 2
+    retry_backoff_seconds: 0.8
+    verify_ssl: false
+    # 本机网络说明（仅影响本机测试，与配置无关，配置里不放任何代理开关）：
+    # 本机 HTTP_PROXY/HTTPS_PROXY=http://127.0.0.1:7890 时通时不通，框架 urllib 会尊重它。
+    # 本机自测一律直连：curl.exe --noproxy "*"，或先设 no_proxy=* 再跑；
+    # 生产服务器无代理，不受影响。
+
+  pagination:
+    # 内容与 /tech 一致，直接走 /tech/{page} 模板（url_template 模式不请求 entry_urls）
+    mode: url_template
+    url_template: https://sh.zhiliaobiaoxun.com/tech/{page}
+    start_page: 1
+    end_page: 3
+    # ⚠ 上限 100：/tech/101 起与 /tech/100 逐字节相同（静默重复尾页），不要调大
+
+  crypto:
+    enabled: false
+
+  cookie:
+    enabled: false
+
+  dedup:
+    redis_hash_key: zhaobiao:domian:linkqc
+    ttl_days: 30
+    prune_probability: 0.01
+
+  list_extraction:
+    response_html_selectors: []
+    # 主列表容器；右侧「热门文章」侧栏是 li.widlist，不在 r_box 内，天然排除
+    item_selectors:
+      - kind: xpath
+        expr: //div[contains(@class, "r_box")]/ul/li
+    link_selectors:
+      - kind: xpath
+        expr: .//h2/a/@href
+    title_selectors:
+      - kind: xpath
+        expr: .//h2/a
+    date_selectors:
+      - kind: xpath
+        expr: .//div[@class="postfoot"]
+    min_title_length: 8
+    fallback_auto: false
+
+  detail_extraction:
+    response_html_selectors: []
+    content_selectors:
+      # 正文容器：含元信息段（项目名称/编号/招标公司/中标公司/标的物/地区）+ 公告正文段
+      - kind: xpath
+        expr: //div[@class="news_con"]
+    # 取正文前整块剔除站方引流句/引流链接（100/100 条都有）：
+    #   1) <p class="content_p"><a class="pj_link">免费查看最新招中标公告</a></p>
+    #      该句含「中标公告」字样，不剔除会让全部记录被判成中标；
+    #   2) <p class="content_p"><a>免费查看原文</a></p>（纯引流，无信息量）
+    # 注意只删「整段只有引流链接」的段落：正文里带「查看完整信息」链接的段落要保留。
+    exclude_selectors:
+      - kind: xpath
+        expr: //p[contains(@class, "content_p")][a[@class="pj_link"] or normalize-space(string(.))="免费查看原文"]
+    # 列表标题与详情 h2.news_title 逐条一致（100/100），此处仅作兜底回填
+    title_selectors:
+      - kind: xpath
+        expr: //h2[@class="news_title"]
+    date_selectors:
+      - kind: xpath
+        expr: //div[@class="bloginfo"]//li[@class="timer"]
+    # 正文选择器命中时不用兜底；关掉兜底避免站点改版后把「相关推荐/广告位」当正文
+    fallback_auto: false
+    fallback_readability: false
+    # 实测正文纯文本长度 min=266 / 中位 605 / max=5761，取 100 作下限挡空壳页
+    min_content_length: 100
+
+  attachments:
+    # 该站详情页没有任何可下载附件（见文件头说明）；且框架在 selectors 为空时会
+    # 回退成「全页 //a/@href」，会把相关推荐页当附件下载，故显式关闭
+    enabled: false
+    selectors: []
+    allowed_extensions: [".pdf", ".doc", ".docx", ".xls", ".xlsx", ".zip", ".rar", ".txt"]
+    max_bytes: 52428800
+
+  classification:
+    # 行业频道，招标与中标同栏混发（实测 69 中标 : 31 招标）
+    default_type: zhaobiao
+    zhongbiao_keywords:
+      # 站方元数据标记：详情正文里「中标公司: xxx」= 已定标（最强特征，59/100 命中、0 误判）
+      - "中标公司:"
+      - 中标公告
+      - 中标结果
+      - 中标候选人
+      - 成交公告
+      - 成交候选人
+      - 成交结果公告
+      - 成交结果公示
+      - 结果公告
+      - 结果公示
+      - 采购结果
+      - 合同公告
+      - 框架协议合同
+      - 中选
+      - 入围
+
+  area_extraction:
+    # sh 子域即上海地区站，列表元信息逐条为「项目地区：上海 上海」，直接定值最准
+    enabled: true
+    fixed_value: 上海
+
+  output:
+    enabled: true
+    queue_zhaobiao: zhaobiao:result:zhaobiao
+    queue_zhongbiao: zhaobiao:result:zhongbiao
+    attachment_dir_zhaobiao: /root/pachong/zhaobiao/data/附件
+    attachment_dir_zhongbiao: /root/pachong/zhaobiao/data_zb/附件

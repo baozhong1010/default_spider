@@ -1,0 +1,210 @@
+# 中国旅游集团官网（www.ctg.cn）「信息公开 - 招标公告总览」栏目 /t393
+#
+# 站点性质：服务端渲染的静态 CMS（Nuxt/Vue 打包但列表与详情内容均已在首屏 HTML 里，
+#   curl 直出即可拿到全部条目，无 AJAX、无 JS 渲染、无登录、无验证码）。
+#   实测直连返回 HTTP 200 / 33,866 字节，Content-Type: text/html;charset=UTF-8，
+#   服务端为 Tengine + 阿里云 CDN（EagleId / ens-cache 响应头）。
+#   注意：站点根 div#page-main 带 style="pointer-events:none"，那是主题皮肤用的空占位，
+#   与抓取无关（正文在 div.app-news / div.app-news-content 里）。
+#
+# 【站点归属核对】任务书里写的是「中国长江三峡集团」，但 ctg.cn 实际是
+#   **中国旅游集团（China Tourism Group）** 的官网：页面 title「招标公告总览 - 中国旅游集团」、
+#   页脚 pr@ctg.cn、导航含「中旅旅行/中旅免税/中旅酒店/华夏邮轮」等中旅系企业。
+#   三峡集团的域名是 ctg.com.cn（.com.cn），不是 .cn，属任务书笔误。
+#   结论：本次按任务书给定的 URL https://www.ctg.cn/t393 抓取，实际站点为中国旅游集团。
+#
+# 【栏目勘察结论 —— 只有这一个相关栏目，招标与中标同栏混发】
+#   /t393  「招标公告总览」（导航：信息公开 > 阳光采购 > 招标公告总览）→ 本配置
+#     面包屑上级「阳光采购」指向站外 https://dzzb.ctg.cn「中国旅游集团-电子招标采购平台」，
+#     那是**另一个独立域名/独立站点**（独立招标采购系统，首页含 70 处「招标」/33 处「中标」），
+#     不属于本次「只做 www.ctg.cn/t393 这一个站点」的范围，故留作遗留项，未配置。
+#   站内不存在单独的中标/结果公告栏目，公告统一发布在 /t393 这一个列表里：
+#     实测 5 条 = 4 条招标类（招标公告 / 资格预审公告）+ 1 条中标类（中标公告），
+#     所以用 default_type=zhaobiao + zhongbiao_keywords 按标题关键词分流，而不是固定分类。
+#
+# 【分页勘察结论 —— 本栏目无分页，只有 1 页 5 条】已实测：
+#   /t393?page=2     → 200，33,866 字节，与第 1 页**逐字节同内容**（参数被忽略）
+#   /t393?p=2        → 200，33,866 字节，同上
+#   /t393.html       → 200，33,866 字节，同上（软路由，同一页）
+#   /t393/2          → 200，但 div.app-news-list **空**（无 li），是软 404 空壳页
+#   页面 HTML 内也没有任何 .pagination / page_num / 上一页下一页 元素（全文搜 page 只命中
+#   page-banner / page-main / page-title 等皮肤类名）。
+#   该栏目 2020-11-30 之后已停更（最新一条即 2020 年那条中标公告）。
+#   因此 pagination.mode: none + 单条 entry_urls，end_page 保持 1（写 3 会产生 2 次
+#   空响应请求，且 url_template 对本站毫无意义）。
+#
+# 【列表结构】div.app-news > div.app-container > div.app-news-list > div.app-news-list-item ×5
+#   <div class="time">2020-11-30</div>
+#   <div class="content"><h3><a href="/article/4449">中旅金融风险管控系统建设项目中标公告</a></h3>
+#     <p>摘要…</p></div>
+#   标题在 a 文本里（完整、不截断），日期为 %Y-%m-%d，链接形如 /article/<数字id>，
+#   经框架 resolve_url 相对 base 解析为 https://www.ctg.cn/article/<id>。
+#
+# 【详情结构】div.app-news-content > div.app-container >
+#     div.app-news-content-head
+#       <h1>完整标题</h1>
+#       <div class="attrs"><span>发布时间： 2020-10-30</span><span>来源： 中旅集团</span></div>
+#     div.app-news-content-body > div[data-moup-content] > <p>…正文…</p>
+#   正文容器取 app-news-content-body（不要取到 app-news-content 那一层，否则会把 h1 和
+#   发布时间一起塞进正文）。标题/日期用详情页回填（列表其实已完整，回填只是兜底）。
+#   注意「发布时间：」与日期之间有一个半角空格，date_selectors 用 \s* 兼容。
+#
+# 【附件】2019 年的资格预审公告正文里是 Ueditor 附件链接，形如
+#   <a href="http://www.ctg.cn/CMS//ueditor/jsp/upload/file/20190725/1564030942119097244.pdf"
+#      title="资格预审公告.pdf">资格预审公告.pdf</a>
+#   附件是**绝对 URL、带 .pdf 后缀，且 a[@title] 就是真实文件名**，故：
+#     - selectors 只匹配 app-news-content-body 内的 .pdf 链接（XPath：.//a[contains(@href,".pdf")]）
+#       避免把站内导航/页脚链接一并当附件；
+#     - filename_selectors 与 selectors 同域、同条件、同顺序（都取 @title / @href），
+#       位置严格一一对应（这是本站可以安全用文件名选择器的前提；对比 sites/cdb_cg.yaml 里
+#       因正文夹带大量无关外链而只能留空的情形）；
+#     - allowed_extensions 必须保留 .pdf 等后缀白名单做二次兜底。
+#   2020 年的两条（招标公告 / 中标公告）正文是纯文字，无附件，属正常情况。
+#   ⚠ 实测（2026-09-15）这 3 个 2019 年公告引用的 PDF **服务端已经不存在**：
+#     选择器能正确取到 3 条 URL 和 3 个真实文件名（已用 DetailExtractor 在本地 HTML 上复现，
+#     例如「资格预审文件-珠海海泉湾时光序花园电梯供货及安装工程（盖章）.pdf」），
+#     但 3 个 URL 直连请求全部返回 HTTP 404（响应体
+#     {"status":404,"error":"Not Found","path":"/CMS//ueditor/jsp/upload/file/..."}），
+#     框架记 3 次 attachment.download.bad_status 并跳过，故最终 附件 字段为空。
+#     这是**源站文件已下线**，不是配置问题：保留选择器，源站若恢复归档即可自动生效。
+#     注意附件是 **http://**（非 https）绝对地址，该 CMS 目录已整体迁移到新 /uploads/ 路径下，
+#     而 3 个老 PDF 没有跟着迁移。
+#
+# 【分类】default_type=zhaobiao，zhongbiao_keywords 只收**结果类专用短语**：
+#   本站 5 条标题实测，「中标公告」命中 1 条（正确），其余 4 条均不含任一关键词（不误伤）；
+#   刻意不放泛词「中标」「结果」「成交」——框架 classify_bid_type 是「标题+正文」全文子串匹配，
+#   招标公告正文普遍出现「中标人/中标候选人/评标结果」等表述，放泛词必然误判。
+
+- id: ctg_zhaobiao
+  enabled: true
+  name: 中国旅游集团-招标公告总览（招标+中标同栏）
+  entry_urls:
+    - https://www.ctg.cn/t393
+
+  schedule:
+    enabled: true
+    interval_seconds: 3600
+
+  limits:
+    max_concurrency: 2
+    # 该栏目仅 5 条且已停更，无需并发压力；限速保守一点避免触发阿里云 WAF（响应头见 acw_tc）
+    request_interval_seconds: 1.0
+
+  request:
+    method: GET
+    headers:
+      Referer: https://www.ctg.cn/t393
+      Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8
+    params: {}
+    timeout_seconds: 40
+    retries: 2
+    retry_backoff_seconds: 0.8
+    verify_ssl: true
+    # 本机网络说明（仅影响本机测试，与配置无关）：本机设了 HTTP_PROXY/HTTPS_PROXY=
+    # http://127.0.0.1:7890，但该代理进程并未监听（WinError 10061 目标计算机积极拒绝），
+    # 框架 urllib 会因此三次重试全部失败（首轮实测：列表请求 0 条、失败 1），
+    # 而 curl 因默认尊重 NO_PROXY 才一直正常。配置里不放代理开关，
+    # 本机自测一律直连（curl.exe --noproxy "*"，或先设 no_proxy=* / 关掉代理再跑）；
+    # 生产服务器无代理，不受影响。
+
+  pagination:
+    # 第 1 页即全量（实测 ?page=2 / ?p=2 / .html 与首页逐字节相同，/t393/2 为空壳页），
+    # 无「第 N 页」可表达，故 mode: none + 单条 entry_urls
+    mode: none
+    end_page: 1
+
+  crypto:
+    enabled: false
+
+  cookie:
+    enabled: false
+
+  dedup:
+    redis_hash_key: zhaobiao:domian:linkqc
+    ttl_days: 30
+    prune_probability: 0.01
+
+  list_extraction:
+    response_html_selectors: []
+    item_selectors:
+      - kind: xpath
+        expr: //div[contains(@class, "app-news-list-item")]
+    link_selectors:
+      - kind: xpath
+        expr: .//div[contains(@class, "content")]//h3/a/@href
+    title_selectors:
+      - kind: xpath
+        expr: .//div[contains(@class, "content")]//h3/a//text()
+    date_selectors:
+      - kind: xpath
+        expr: .//div[contains(@class, "time")]//text()
+    min_title_length: 6
+    fallback_auto: false
+
+  detail_extraction:
+    response_html_selectors: []
+    content_selectors:
+      # 取 body 层，避免把 h1 标题与「发布时间/来源」元信息混进正文
+      - kind: xpath
+        expr: //div[contains(@class, "app-news-content-body")]
+    # 列表标题本就完整，详情 h1 仅作兜底回填
+    title_selectors:
+      - kind: xpath
+        expr: //div[contains(@class, "app-news-content-head")]//h1//text()
+    # 「发布时间： 2020-10-30」→ 取日期段（冒号后有一个半角空格）
+    date_selectors:
+      - kind: regex
+        expr: "发布时间：\\s*(\\d{4}[-/.]\\d{1,2}[-/.]\\d{1,2})"
+    fallback_auto: true
+    fallback_readability: true
+    # 4072/4073/4074 三条 2019 年公告正文里只有一句附件名（"资格预审公告.pdf" /
+    # "资格预审文件-珠海海泉湾时光序花园电梯供货及安装工程（盖章）.pdf"），正文本身极短，
+    # 阈值不能按常规 30 设，否则这类纯附件公告会被判 content_too_short 丢弃。
+    # 实测三条的纯文本长度分别为 10 / 29 / 34，取 10 为下限（框架判定是 len < 阈值 才丢，
+    # 等于 10 的那条刚好保留），且仍能把「正文彻底为空、只剩模板壳」的页面挡掉。
+    min_content_length: 10
+
+  attachments:
+    enabled: true
+    # 只取正文容器内的 .pdf 附件链接
+    selectors:
+      - kind: xpath
+        expr: //div[contains(@class, "app-news-content-body")]//a[contains(@href, ".pdf")]/@href
+    # 与上方 selectors 同域同序，位置严格对齐：a[@title] 即真实文件名
+    # （如「资格预审公告-珠海海泉湾时光序花园人防工程（盖章）.pdf」）；
+    # 缺失时框架自动回退到 URL basename / Content-Disposition
+    filename_selectors:
+      - kind: xpath
+        expr: //div[contains(@class, "app-news-content-body")]//a[contains(@href, ".pdf")]/@title
+    allowed_extensions: [".pdf"]
+    max_bytes: 52428800
+
+  classification:
+    # 本栏目招标与中标同栏混发（实测 4 招标 : 1 中标），按标题关键词分流
+    default_type: zhaobiao
+    zhongbiao_keywords:
+      - 中标公告
+      - 中标结果
+      - 中标公示
+      - 中标候选人
+      - 成交公告
+      - 成交结果
+      - 成交公示
+      - 结果公告
+      - 结果公示
+      - 废标
+      - 流标
+      - 终止公告
+
+  area_extraction:
+    # 集团总部集中发布，公告本身无地区字段；正文/标题常含项目所在地
+    # （深圳、珠海海泉湾等），由框架启发式提取，不设 fixed_value
+    enabled: true
+    use_title_first: true
+
+  output:
+    enabled: true
+    queue_zhaobiao: zhaobiao:result:zhaobiao
+    queue_zhongbiao: zhaobiao:result:zhongbiao
+    attachment_dir_zhaobiao: /root/pachong/zhaobiao/data/附件
+    attachment_dir_zhongbiao: /root/pachong/zhaobiao/data_zb/附件

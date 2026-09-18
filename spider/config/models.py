@@ -41,6 +41,18 @@ class Selector(BaseModel):
     attr: Optional[str] = None
 
 
+class TokenBootstrapConfig(BaseModel):
+    """请求前先从某个页面里提取一次性令牌（如 Laravel CSRF），供本轮所有请求带上。"""
+
+    # 提取令牌的页面地址（通常就是栏目页）
+    url: str
+    # 从响应文本里提取令牌的正则；有捕获组时取第 1 组，否则取整段匹配
+    expr: str
+    # 令牌写入的请求头名
+    header: str = "X-CSRF-TOKEN"
+    method: str = "GET"
+
+
 class RequestConfig(BaseModel):
     method: str = "GET"
     headers: Dict[str, str] = Field(default_factory=dict)
@@ -53,6 +65,9 @@ class RequestConfig(BaseModel):
     verify_ssl: bool = False
     # 用无头 Chrome 渲染页面（针对瑞数等 JS 反爬），仅对列表/详情页生效
     use_chrome: bool = False
+    # 令牌自举：先抓一次页面、正则提取令牌（如 Laravel CSRF），自动加到列表/详情请求头上；
+    # 会话 Cookie 由抓取器 CookieJar 自动维护，因此无需把令牌与会话写死进配置。
+    token_bootstrap: Optional[TokenBootstrapConfig] = None
 
     class Config:
         allow_population_by_field_name = True
@@ -169,6 +184,11 @@ class DetailExtractionConfig(BaseModel):
     # 若详情响应是 JSON，且真正 HTML 正文在某个字段里，用这个先提取（例如 $.custom.custom.infoContent）
     response_html_selectors: List[Selector] = Field(default_factory=list)
     content_selectors: List[Selector] = Field(default_factory=list)
+    # 正文前置剔除：序列化正文前，先从正文节点内部删掉这些节点（站点广告/引流/相关推荐块）。
+    # 这些块会被写进「正文内容」，还会污染 classification 的关键词匹配
+    # （如知了标讯每条正文尾部都有「免费查看最新招中标公告」，含「中标公告」字样，
+    #  不剔除就会把全部记录判成中标）。xpath 以 // 开头时自动限定在正文节点内。
+    exclude_selectors: List[Selector] = Field(default_factory=list)
     # 详情页完整标题选择器（列表标题被截断时回填；为空时用列表标题）
     title_selectors: List[Selector] = Field(default_factory=list)
     # 详情页发布时间选择器（列表无日期字段时回填；为空时用列表日期）

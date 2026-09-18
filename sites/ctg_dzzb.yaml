@@ -1,0 +1,872 @@
+# 中国旅游集团-电子招标采购平台（dzzb.ctg.cn）—— 中国旅游集团有限公司（香港中旅集团）官方招采平台
+#
+# 站点归属：`dzzb.ctg.cn` 是 www.ctg.cn 官网导航「信息公开 › 阳光采购」外链指向的**独立招采平台**。
+#   页脚自述「中国旅游集团有限公司暨香港中旅(集团)有限公司」，导航含中旅旅行/中旅国际/中旅投资/
+#   中旅免税/中旅酒店/中旅发展/中旅资产/中旅邮轮八大业务单元，与 sites/ctg.yaml（www.ctg.cn/t393）
+#   同属一个集团但**是两套完全不同的系统**，故本文件单独成站、与 ctg.yaml 无任何耦合。
+#   平台实际运营方为「华润守正招标有限公司」（正文落款「华润守正招标有限公司受招标人委托」），
+#   但公告主体全部为 ctg.cn 域名的中旅系单位。
+#
+# ── 站点性质与可达性（实测 2026-09-15，全部 `curl.exe --noproxy "*"`）──────────────────
+#   · 独立 CMS 站点，服务端渲染静态 HTML：列表页与列表项全部在首屏 HTML 里，
+#     无 AJAX 取列表、无 JS 渲染、**匿名可访问、无登录墙、无验证码**。
+#   · HTTP 栈：nginx/1.28.0（前置）+ 后端为 hzero/汉得 SRM 体系（szecp.com.cn / szecp.com.hk）。
+#   · `https://dzzb.ctg.cn/` → **301** → `https://dzzb.ctg.cn/cms/`（entry 直接写 /cms/，少一跳）。
+#   · 列表页实测 200 / text/html / 29~36KB / 0.7~4.4s；详情页 200 / 16~330KB / 1~2s。
+#   · 栏目路径规律：`https://dzzb.ctg.cn/cms/{栏目代码}/index.html`（代码见各站点注释）。
+#   · ⚠ 任务书里提到的 `dzzb.ctg.cn/ctg/` 实测 404：本站**没有** /ctg/ 路径，栏目一律走 /cms/。
+#
+# ── 本机网络说明（与 ctg.yaml 同因，仅影响本机测试，与配置无关）──────────────────────────
+#   本机注册表/环境变量里有 HTTP_PROXY/HTTPS_PROXY=http://127.0.0.1:7890，且时通时不通
+#   （实测既有 WinError 10061「无监听」，也有能通但明显变慢的情况）。框架走 urllib 会尊重
+#   该设置。**结论：配置里不放任何代理开关**，本机自测时一律直连
+#   （curl.exe --noproxy "*"，或先关掉本机代理/设 no_proxy=* 再跑），生产服务器无代理不受影响。
+#
+# ── 栏目映射（以首页 `https://dzzb.ctg.cn/cms/` 一级导航「招标专区/非招标专区」下拉菜单
+#    实测为准，非照抄任务书草表）──────────────────────────────────────────────────────
+#   ┌────────────┬──────────────────┬──────────────────────────────┬───────────┬────────┐
+#   │ 专区       │ 栏目名           │ 路径                          │ 分类      │ 总条数 │
+#   ├────────────┼──────────────────┼──────────────────────────────┼───────────┼────────┤
+#   │ 招标专区   │ 招标(预审)公告   │ /cms/cmszhaozhaobiaoysgg/     │ zhaobiao  │ 569    │
+#   │ 招标专区   │ 变更公告         │ /cms/cmszhaobiangenggg/       │ zhaobiao  │ 515    │
+#   │ 招标专区   │ 中标候选人公示   │ /cms/cmszhaohouxuanrengs/     │ zhongbiao │ 431    │
+#   │ 招标专区   │ 中标公告         │ /cms/cmszhaozhongbiaogg/      │ zhongbiao │ 429    │
+#   │ 招标专区   │ 终止公告         │ /cms/cmszhaozhongzhigg/       │ zhongbiao │ 122    │
+#   │ 非招标专区 │ 采购公告         │ /cms/cmsfeicaigougg/          │ zhaobiao  │ 1275   │
+#   │ 非招标专区 │ 变更公告         │ /cms/cmsfeibiangenggg/        │ zhaobiao  │ 899    │
+#   │ 非招标专区 │ 结果公告         │ /cms/cmsfeijieguogg/          │ zhongbiao │ 1888   │
+#   ├────────────┼──────────────────┼──────────────────────────────┼───────────┼────────┤
+#   │ 国际专区   │ 采购/变更/中选/中标候选人/线下采购/供应商征集 6 栏 —— **未配置，见下** │
+#   └────────────┴──────────────────┴──────────────────────────────┴───────────┴────────┘
+#   另有招标专区「开标日程」/cms/cmszhaokaibiaorc/（28KB，非公告类，是开标时间表）——**未配置**。
+#
+# ── ⛔ 阻断项：国际专区（潤匯采 國際版）6 栏无法抓取 ─────────────────────────────────────
+#   国际专区列表页在 dzzb.ctg.cn 上正常（匿名 200，每页 10 条），但**详情不在本站**：
+#   链接指向跨域的
+#     https://szecp.com.hk/oauth/public/default/notice_detail.html?param=<base64>
+#   该页是 JS 空壳（29KB，正文由 `$.ajax` 拉取），页面内联脚本给出接口基址
+#   `gateWayUrl = "https://szecp.com.hk/srm/api"`，真实正文接口为：
+#     GET https://szecp.com.hk/srm/api/ssrc/v1/rfx-notice-for-oauth/{noticeId}/{language}
+#   实测该接口**匿名 200 + application/json + 16.5KB，无需登录**（字段 noticeTitle /
+#   htmlContent / publicityStartDate / docUrl / detailUrl），所以只差一件事：把 noticeId 从
+#   param 的 base64 里解出来（base64 解出 {"noticeId":"19154","rfxHeaderId":…,"sourceCategory":…}）。
+#   而框架给不出这个能力，逐条实测：
+#     · detail_request.url_template 只支持 {value}/{link}/{title} 三个**字符串**占位符，
+#       没有 base64 解码、也不能对 {link} 再跑正则；
+#     · 把 ?param=<base64>&language=… 当**查询串**传给接口 → **403**（145 字节 Forbidden），
+#       且任何一次 parse_qsl/urlencode 往返都会在第一个 `=` 处截断 base64；
+#     · 把 {link} 塞进**路径段**再拼 `?language=zh_CN` → 仍然 **403**（服务端只认纯数字 noticeId 段）；
+#     · 换 ?noticeId=19154 / /oauth/public/default/notice_detail.html?noticeId=19154 等形态
+#       —— notice_detail 页能 200 但正文仍靠 JS，拿不到内容；
+#     · list_extraction.detail_url_template 虽支持 regex 捕获组，但 noticeId 数字串在 base64 里的
+#       起始位置**随 noticeId 位数变化**（实测 120 条链接：real=19203 等全部取不到），
+#       唯一稳定的锚点是尾部的 `InNvdXJjZUNhdGVnb3J5Ijoi`（= base64 of `","sourceCategory":"`），
+#       而 base64 是 3 字节一组编码，尾部锚点无法反推出开头数字的位置 → 该路也不通。
+#   → 结论：**如实阻断**，不硬写。国际专区 6 栏（采购/变更/中选/中标候选人/线下采购/供应商征集，
+#     合计 159+98+136+0+20+0 条）需要「先解 base64 再拼 URL」的框架能力（或一个专用
+#     crypto/module 插件）才能抓；本次按任务书「国际专区可酌情」处理，未纳入交付配置。
+#     其中 中标候选人公示、供应商征集公告 两栏源站本身也是 **0 条记录**。
+#
+# ── 分页勘察结论：`index.html` / `index_2.html` / `index_3.html` …（不是 ?page=N）──────
+#   实测（`招标(预审)公告` 栏目）：
+#     /cms/cmszhaozhaobiaoysgg/index.html    → 200，共569条记录 1/57页，10 条
+#     /cms/cmszhaozhaobiaoysgg/index_2.html  → 200，共569条记录 2/57页，10 条（条目与第 1 页不同）
+#     /cms/cmszhaozhaobiaoysgg/index_3.html  → 200，共569条记录 3/57页，10 条
+#     `?page=2` 之类查询参数**无效**（页面分页控件是
+#     `onChange="if(this.value==1){location='index.html'}else{location='index_'+this.value+'.html'}"`）。
+#   因此框架的 5 种 pagination.mode **没有一个能表达**「第 1 页 = index.html、第 N 页 = index_{N}.html」
+#   （mode: none 不翻页；page_param 只会加查询参数；url_template 的 {page} 从 1 起，
+#    会得到 index_1.html，而该地址实测返回的是**第 1 页**内容 → 会静默少抓）。
+#   → 结论：`pagination.mode: none` + 把每页 URL 显式列进 entry_urls（交付口径每栏目 3 页）。
+#   每个栏目每页固定 10 条，页数上限见上表（交付范围 3 页/栏目 = 每栏目 30 条）。
+#   ⚠ 越界页会**静默回落**到最后一页（实测国际专区 `线下采购公告` 只有 2 页，index_3.html 返回的
+#     是第 2 页内容，HTTP 仍 200）——所以 entry_urls 只能写到真实页数。本配置交付的 8 个栏目
+#     页数都 ≥ 13 页（最少 终止公告 13 页），写 3 页不会越界。
+#
+# ── 列表页结构（交付的 8 个栏目完全一致）──────────────────────────────────────────────
+#   <div class="PaddingLR15 List2">
+#     <ul>
+#       <li>
+#         <a href="/cms/cmszhaozhaobiaoysgg/<32位hex>.html"
+#            title="完整标题" class="text"> [可选 <span title="完整标题">截断…</span> ] </a>
+#         <p>
+#           <span class="Right10">招采类型：<span class="Blue">服务</span></span>
+#           <span class="Right10">招标编号：<span class="Blue">ZBGG202609110001</span></span>
+#           <span class="Right10">采购组织：<span class="Blue">香港中旅国际投资有限公司</span></span>
+#           <span class="Right10">所属栏目：<span><a href="…/index.html" class="Blue">招标(预审)公告</a></span></span>
+#           <span class="Right10">访问：<span class="Blue">14</span> 次</span>
+#           <span class="Gray Right">发布时间：2026-09-11</span>
+#         </p>
+#       </li>  ×10
+#     </ul>
+#     <div class="fenye">共569条记录 1/57页 …</div>
+#   </div>
+#   ⚠ 列表项里共有 **2 个 `<a>`**：第 1 个是详情链接，第 2 个是 `<p>` 里「所属栏目」的回链
+#     （指向 index.html）。所以 link/title 选择器必须用 `.//a[1]/…` 锁定第一个，否则会取到栏目回链。
+#   ⚠ 标题**必须以 `@title` 优先**：HTML 里可见文本对长标题是截断的
+#     （`星旅（三亚）置业有限公司2026-2027年中旅投资…`），`@title` 才是完整标题。
+#     实测 3 页 × 8 栏目无一条截断。
+#   ⚠ 日期：`发布时间：2026-09-11` 所在的 `<span>` 同时带 class="Right10" 与 class="Gray Right"，
+#     直接写 XPath 容易取到「访问：14 次」。本配置用 **regex** 在本条 `<li>` 的 HTML 片段上取
+#     `发布时间：\s*(\d{4}-\d{1,2}-\d{1,2})`。实测每个 `<li>` 恰好命中 1 次、整页恰好 10 次，
+#     无串行风险；取到的值带「发布时间：」前缀，框架 `normalize_date_yyyy_mm_dd` 内含
+#     `re.search(r"(\d{4})\D?(\d{1,2})\D?(\d{1,2})")` 兜底，能正确归一成 `YYYY-MM-DD`。
+#
+# ── 详情页结构（交付的 8 栏，服务端渲染 HTML，匿名 200）─────────────────────────────────
+#   <div class="W1400 Center PaddingTop10 shadow Top25">
+#     <h1 class="TxtCenter Top10">完整标题</h1>
+#     <div class="TxtCenter Gray BorderTopDot Top18 Padding10">发布时间：  2026/09/15 12:31:05 访问次数：…</div>
+#     <div class="Content" style="min-height:500px; padding:0 30px;"> …公告正文 HTML… </div>
+#     <div class="Content"> 温馨提示 + 「我要投标」按钮（指向 srm/portal 登录 SSO）</div>
+#   </div>
+#   ⚠ 页面里有 **2 个 `div.Content`** 和 **2 个 `h1`**（另一个 h1 在 LmBanner 面包屑区、
+#     另一个 Content 是「温馨提示」）。正文必须用 `//div[@class="Content"][1]`
+#     （也可以用 `//div[contains(@class,"Content")][1]`），标题用
+#     `//h1[contains(@class,"TxtCenter")]`，否则会把温馨提示/栏目名混进正文。
+#   ⚠ 详情正文里**不含**任何 `app/file/download` 附件链接（实测 24 篇样本 0 条）。招标文件要登录
+#     srm/portal 才能下载，页面只留一个指向登录 SSO 的「我要投标」按钮——因此附件字段为空是
+#     **正确结果，不是配置缺陷**（国际专区的公告原件才是公开直链，但那 6 栏已阻断，见上）。
+#   ⚠ 日期：详情页是 `发布时间：  2026/09/15 12:31:05`（斜杠 + 时分秒），
+#     正则 `发布时间：\s*(\d{4}/\d{1,2}/\d{1,2})` 直接取到纯日期，避免把时分秒带进去。
+#
+# ── 附件 ─────────────────────────────────────────────────────────────────────────────
+#   `attachments.enabled: true` 但实测 24 篇样本 0 条 → 附件字段必然为空（源站如此，见上）。
+#   选择器保留 `//div[@class="Content"][1]//a[contains(@href,"app/file/download")]/@href`：
+#   只认 CMS 自身的下载接口，**绝不能留空**——留空时框架回退 `//a/@href`，会把导航、
+#   登录 SSO、中旅商城等几十条站内链接当附件下载。
+#   `allowed_extensions: []`：CMS 下载接口 URL 无后缀（形如
+#   `/cms/app/file/download/<uuid>?trt=…&token=…`，favicon/logo 就是这个形态），
+#   带后缀白名单会把真实附件全部滤掉；框架会按 Content-Disposition 命名并按文件头补扩展名。
+#
+# ── 分类 ─────────────────────────────────────────────────────────────────────────────
+#   各栏目都是**固定分类栏目**（招标/变更/终止/候选人/中标/结果 各自独立成栏），
+#   故一律 `zhongbiao_keywords: []`，只用 `default_type` 表达：
+#     zhaobiao  ← 招标(预审)公告、招标变更公告、非招标采购公告、非招标变更公告
+#     zhongbiao ← 中标候选人公示、中标公告、终止公告、非招标结果公告
+#   （终止公告归 zhongbiao 是任务书给定口径；该栏标题实测 30/30 都是「…终止招标公告」，
+#     与「中标/成交」同类结果性告知，且它**不会**污染招标侧队列。）
+#   ⚠ 不能靠关键词在混合栏目里分流：框架 `classify_bid_type` 是「标题+正文」全文子串匹配，
+#     招标公告正文里「中标候选人/中标结果」遍地都是，放泛词必然误判。
+#
+# ── 地区提取：刻意关闭（如实用空值，优于全量误标）────────────────────────────────────
+#   本平台是集团级集中发布，公告**没有地区字段**；`detect_area` 会把 title 与 content 两个池子
+#   都拿去匹配省级别名，而正文里既有「招标人地址：北京市东城区…」（中标人/招标人注册地），
+#   也有项目所在地，谁先出现就归谁。实测 24 篇样本里：
+#     · 标题含地名时结果正确（中旅（广州）→广东省、吉林省松花湖 →吉林省、中免集团（海南）→海南省）；
+#     · 标题**不含**地名时会从正文地址栏误取，例如
+#       「中免集团三亚市内免税店有限公司三亚公司…课程服务采购项目公告」被判成 **北京市**
+#       （因为联系人地址是北京），实际在海南。
+#   即「有地名时本就靠标题命中、没地名时大概率误标」，所以统一 `enabled: false`。
+#   如后续确需地区，正确做法是取列表/详情里的真实项目所在地字段写进
+#   `list_extraction.area_selectors`——但本站列表 `<p>` 只有招采类型/招标编号/采购组织/访问数，
+#   没有项目地址字段（详情正文里才有「项目地址：广州」这类文本，需另写解析），故本次未配。
+#
+# ── 测试口径 ─────────────────────────────────────────────────────────────────────────
+#   本地测试把每站 entry_urls 收敛到**第 1 页**（每栏目 10 条）；交付稿为每栏目 3 页。
+#   站点响应 0.7~4.4s、无风控，故 max_concurrency: 2 + request_interval_seconds: 0.5 保守限速。
+
+# ============================== 招标专区（5 栏） ==============================
+
+- id: ctgdzzb_zbys
+  enabled: true
+  name: 中国旅游集团电子招标采购平台-招标专区-招标(预审)公告
+  entry_urls:
+    # 分页是 index.html / index_2.html / index_3.html，框架无对应 mode，故显式列页（详见文件头说明）
+    - https://dzzb.ctg.cn/cms/cmszhaozhaobiaoysgg/index.html
+    - https://dzzb.ctg.cn/cms/cmszhaozhaobiaoysgg/index_2.html
+    - https://dzzb.ctg.cn/cms/cmszhaozhaobiaoysgg/index_3.html
+  schedule:
+    enabled: true
+    interval_seconds: 3600
+  limits:
+    max_concurrency: 2
+    request_interval_seconds: 0.5
+  request:
+    method: GET
+    headers:
+      Referer: https://dzzb.ctg.cn/cms/cmszhaozhaobiaoysgg/index.html
+      Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8
+    params: {}
+    timeout_seconds: 40
+    retries: 2
+    retry_backoff_seconds: 0.8
+    verify_ssl: true
+  pagination:
+    mode: none
+    end_page: 1
+  crypto:
+    enabled: false
+  cookie:
+    enabled: false
+  dedup:
+    redis_hash_key: zhaobiao:domian:linkqc
+    ttl_days: 30
+    prune_probability: 0.01
+  list_extraction:
+    response_html_selectors: []
+    item_selectors:
+      - kind: xpath
+        expr: //div[contains(@class,"List2")]//ul/li
+    link_selectors:
+      - kind: xpath
+        expr: .//a[1]/@href
+    title_selectors:
+      - kind: xpath
+        expr: .//a[1]/@title
+      - kind: xpath
+        expr: .//a[1]//text()
+    date_selectors:
+      - kind: regex
+        expr: "发布时间：\\s*(\\d{4}-\\d{1,2}-\\d{1,2})"
+    min_title_length: 6
+    fallback_auto: false
+  detail_extraction:
+    response_html_selectors: []
+    content_selectors:
+      - kind: xpath
+        expr: //div[@class="Content"][1]
+    title_selectors:
+      - kind: xpath
+        expr: //h1[contains(@class,"TxtCenter")]//text()
+    date_selectors:
+      - kind: regex
+        expr: "发布时间：\\s*(\\d{4}/\\d{1,2}/\\d{1,2})"
+    fallback_auto: true
+    fallback_readability: true
+    min_content_length: 30
+  attachments:
+    enabled: true
+    selectors:
+      - kind: xpath
+        expr: //div[@class="Content"][1]//a[contains(@href,"app/file/download")]/@href
+    filename_selectors: []
+    allowed_extensions: []
+    max_bytes: 52428800
+  classification:
+    default_type: zhaobiao
+    zhongbiao_keywords: []
+  area_extraction:
+    enabled: false
+    use_title_first: true
+  output:
+    enabled: true
+    queue_zhaobiao: zhaobiao:result:zhaobiao
+    queue_zhongbiao: zhaobiao:result:zhongbiao
+    attachment_dir_zhaobiao: /root/pachong/zhaobiao/data/附件
+    attachment_dir_zhongbiao: /root/pachong/zhaobiao/data_zb/附件
+
+- id: ctgdzzb_zbbg
+  enabled: true
+  name: 中国旅游集团电子招标采购平台-招标专区-变更公告
+  entry_urls:
+    - https://dzzb.ctg.cn/cms/cmszhaobiangenggg/index.html
+    - https://dzzb.ctg.cn/cms/cmszhaobiangenggg/index_2.html
+    - https://dzzb.ctg.cn/cms/cmszhaobiangenggg/index_3.html
+  schedule:
+    enabled: true
+    interval_seconds: 3600
+  limits:
+    max_concurrency: 2
+    request_interval_seconds: 0.5
+  request:
+    method: GET
+    headers:
+      Referer: https://dzzb.ctg.cn/cms/cmszhaobiangenggg/index.html
+      Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8
+    params: {}
+    timeout_seconds: 40
+    retries: 2
+    retry_backoff_seconds: 0.8
+    verify_ssl: true
+  pagination:
+    mode: none
+    end_page: 1
+  crypto:
+    enabled: false
+  cookie:
+    enabled: false
+  dedup:
+    redis_hash_key: zhaobiao:domian:linkqc
+    ttl_days: 30
+    prune_probability: 0.01
+  list_extraction:
+    response_html_selectors: []
+    item_selectors:
+      - kind: xpath
+        expr: //div[contains(@class,"List2")]//ul/li
+    link_selectors:
+      - kind: xpath
+        expr: .//a[1]/@href
+    title_selectors:
+      - kind: xpath
+        expr: .//a[1]/@title
+      - kind: xpath
+        expr: .//a[1]//text()
+    date_selectors:
+      - kind: regex
+        expr: "发布时间：\\s*(\\d{4}-\\d{1,2}-\\d{1,2})"
+    min_title_length: 6
+    fallback_auto: false
+  detail_extraction:
+    response_html_selectors: []
+    content_selectors:
+      - kind: xpath
+        expr: //div[@class="Content"][1]
+    title_selectors:
+      - kind: xpath
+        expr: //h1[contains(@class,"TxtCenter")]//text()
+    date_selectors:
+      - kind: regex
+        expr: "发布时间：\\s*(\\d{4}/\\d{1,2}/\\d{1,2})"
+    fallback_auto: true
+    fallback_readability: true
+    min_content_length: 30
+  attachments:
+    enabled: true
+    selectors:
+      - kind: xpath
+        expr: //div[@class="Content"][1]//a[contains(@href,"app/file/download")]/@href
+    filename_selectors: []
+    allowed_extensions: []
+    max_bytes: 52428800
+  classification:
+    # 招标变更/延期/澄清类，归招标侧
+    default_type: zhaobiao
+    zhongbiao_keywords: []
+  area_extraction:
+    enabled: false
+    use_title_first: true
+  output:
+    enabled: true
+    queue_zhaobiao: zhaobiao:result:zhaobiao
+    queue_zhongbiao: zhaobiao:result:zhongbiao
+    attachment_dir_zhaobiao: /root/pachong/zhaobiao/data/附件
+    attachment_dir_zhongbiao: /root/pachong/zhaobiao/data_zb/附件
+
+- id: ctgdzzb_zbhxr
+  enabled: true
+  name: 中国旅游集团电子招标采购平台-招标专区-中标候选人公示
+  entry_urls:
+    - https://dzzb.ctg.cn/cms/cmszhaohouxuanrengs/index.html
+    - https://dzzb.ctg.cn/cms/cmszhaohouxuanrengs/index_2.html
+    - https://dzzb.ctg.cn/cms/cmszhaohouxuanrengs/index_3.html
+  schedule:
+    enabled: true
+    interval_seconds: 3600
+  limits:
+    max_concurrency: 2
+    request_interval_seconds: 0.5
+  request:
+    method: GET
+    headers:
+      Referer: https://dzzb.ctg.cn/cms/cmszhaohouxuanrengs/index.html
+      Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8
+    params: {}
+    timeout_seconds: 40
+    retries: 2
+    retry_backoff_seconds: 0.8
+    verify_ssl: true
+  pagination:
+    mode: none
+    end_page: 1
+  crypto:
+    enabled: false
+  cookie:
+    enabled: false
+  dedup:
+    redis_hash_key: zhaobiao:domian:linkqc
+    ttl_days: 30
+    prune_probability: 0.01
+  list_extraction:
+    response_html_selectors: []
+    item_selectors:
+      - kind: xpath
+        expr: //div[contains(@class,"List2")]//ul/li
+    link_selectors:
+      - kind: xpath
+        expr: .//a[1]/@href
+    title_selectors:
+      - kind: xpath
+        expr: .//a[1]/@title
+      - kind: xpath
+        expr: .//a[1]//text()
+    date_selectors:
+      - kind: regex
+        expr: "发布时间：\\s*(\\d{4}-\\d{1,2}-\\d{1,2})"
+    min_title_length: 6
+    fallback_auto: false
+  detail_extraction:
+    response_html_selectors: []
+    content_selectors:
+      - kind: xpath
+        expr: //div[@class="Content"][1]
+    title_selectors:
+      - kind: xpath
+        expr: //h1[contains(@class,"TxtCenter")]//text()
+    date_selectors:
+      - kind: regex
+        expr: "发布时间：\\s*(\\d{4}/\\d{1,2}/\\d{1,2})"
+    fallback_auto: true
+    fallback_readability: true
+    min_content_length: 30
+  attachments:
+    enabled: true
+    selectors:
+      - kind: xpath
+        expr: //div[@class="Content"][1]//a[contains(@href,"app/file/download")]/@href
+    filename_selectors: []
+    allowed_extensions: []
+    max_bytes: 52428800
+  classification:
+    default_type: zhongbiao
+    zhongbiao_keywords: []
+  area_extraction:
+    enabled: false
+    use_title_first: true
+  output:
+    enabled: true
+    queue_zhaobiao: zhaobiao:result:zhaobiao
+    queue_zhongbiao: zhaobiao:result:zhongbiao
+    attachment_dir_zhaobiao: /root/pachong/zhaobiao/data/附件
+    attachment_dir_zhongbiao: /root/pachong/zhaobiao/data_zb/附件
+
+- id: ctgdzzb_zbgg
+  enabled: true
+  name: 中国旅游集团电子招标采购平台-招标专区-中标公告
+  entry_urls:
+    - https://dzzb.ctg.cn/cms/cmszhaozhongbiaogg/index.html
+    - https://dzzb.ctg.cn/cms/cmszhaozhongbiaogg/index_2.html
+    - https://dzzb.ctg.cn/cms/cmszhaozhongbiaogg/index_3.html
+  schedule:
+    enabled: true
+    interval_seconds: 3600
+  limits:
+    max_concurrency: 2
+    request_interval_seconds: 0.5
+  request:
+    method: GET
+    headers:
+      Referer: https://dzzb.ctg.cn/cms/cmszhaozhongbiaogg/index.html
+      Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8
+    params: {}
+    timeout_seconds: 40
+    retries: 2
+    retry_backoff_seconds: 0.8
+    verify_ssl: true
+  pagination:
+    mode: none
+    end_page: 1
+  crypto:
+    enabled: false
+  cookie:
+    enabled: false
+  dedup:
+    redis_hash_key: zhaobiao:domian:linkqc
+    ttl_days: 30
+    prune_probability: 0.01
+  list_extraction:
+    response_html_selectors: []
+    item_selectors:
+      - kind: xpath
+        expr: //div[contains(@class,"List2")]//ul/li
+    link_selectors:
+      - kind: xpath
+        expr: .//a[1]/@href
+    title_selectors:
+      - kind: xpath
+        expr: .//a[1]/@title
+      - kind: xpath
+        expr: .//a[1]//text()
+    date_selectors:
+      - kind: regex
+        expr: "发布时间：\\s*(\\d{4}-\\d{1,2}-\\d{1,2})"
+    min_title_length: 6
+    fallback_auto: false
+  detail_extraction:
+    response_html_selectors: []
+    content_selectors:
+      - kind: xpath
+        expr: //div[@class="Content"][1]
+    title_selectors:
+      - kind: xpath
+        expr: //h1[contains(@class,"TxtCenter")]//text()
+    date_selectors:
+      - kind: regex
+        expr: "发布时间：\\s*(\\d{4}/\\d{1,2}/\\d{1,2})"
+    fallback_auto: true
+    fallback_readability: true
+    min_content_length: 30
+  attachments:
+    enabled: true
+    selectors:
+      - kind: xpath
+        expr: //div[@class="Content"][1]//a[contains(@href,"app/file/download")]/@href
+    filename_selectors: []
+    allowed_extensions: []
+    max_bytes: 52428800
+  classification:
+    default_type: zhongbiao
+    zhongbiao_keywords: []
+  area_extraction:
+    enabled: false
+    use_title_first: true
+  output:
+    enabled: true
+    queue_zhaobiao: zhaobiao:result:zhaobiao
+    queue_zhongbiao: zhaobiao:result:zhongbiao
+    attachment_dir_zhaobiao: /root/pachong/zhaobiao/data/附件
+    attachment_dir_zhongbiao: /root/pachong/zhaobiao/data_zb/附件
+
+- id: ctgdzzb_zbzz
+  enabled: true
+  name: 中国旅游集团电子招标采购平台-招标专区-终止公告
+  entry_urls:
+    - https://dzzb.ctg.cn/cms/cmszhaozhongzhigg/index.html
+    - https://dzzb.ctg.cn/cms/cmszhaozhongzhigg/index_2.html
+    - https://dzzb.ctg.cn/cms/cmszhaozhongzhigg/index_3.html
+  schedule:
+    enabled: true
+    interval_seconds: 3600
+  limits:
+    max_concurrency: 2
+    request_interval_seconds: 0.5
+  request:
+    method: GET
+    headers:
+      Referer: https://dzzb.ctg.cn/cms/cmszhaozhongzhigg/index.html
+      Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8
+    params: {}
+    timeout_seconds: 40
+    retries: 2
+    retry_backoff_seconds: 0.8
+    verify_ssl: true
+  pagination:
+    mode: none
+    end_page: 1
+  crypto:
+    enabled: false
+  cookie:
+    enabled: false
+  dedup:
+    redis_hash_key: zhaobiao:domian:linkqc
+    ttl_days: 30
+    prune_probability: 0.01
+  list_extraction:
+    response_html_selectors: []
+    item_selectors:
+      - kind: xpath
+        expr: //div[contains(@class,"List2")]//ul/li
+    link_selectors:
+      - kind: xpath
+        expr: .//a[1]/@href
+    title_selectors:
+      - kind: xpath
+        expr: .//a[1]/@title
+      - kind: xpath
+        expr: .//a[1]//text()
+    date_selectors:
+      - kind: regex
+        expr: "发布时间：\\s*(\\d{4}-\\d{1,2}-\\d{1,2})"
+    min_title_length: 6
+    fallback_auto: false
+  detail_extraction:
+    response_html_selectors: []
+    content_selectors:
+      - kind: xpath
+        expr: //div[@class="Content"][1]
+    title_selectors:
+      - kind: xpath
+        expr: //h1[contains(@class,"TxtCenter")]//text()
+    date_selectors:
+      - kind: regex
+        expr: "发布时间：\\s*(\\d{4}/\\d{1,2}/\\d{1,2})"
+    fallback_auto: true
+    fallback_readability: true
+    min_content_length: 30
+  attachments:
+    enabled: true
+    selectors:
+      - kind: xpath
+        expr: //div[@class="Content"][1]//a[contains(@href,"app/file/download")]/@href
+    filename_selectors: []
+    allowed_extensions: []
+    max_bytes: 52428800
+  classification:
+    # 任务书口径：终止公告归 zhongbiao。实测该栏 30/30 标题均为「…终止招标公告」，
+    # 属结果性告知，与中标/成交同侧，且不会污染 zhaobiao 队列。
+    default_type: zhongbiao
+    zhongbiao_keywords: []
+  area_extraction:
+    enabled: false
+    use_title_first: true
+  output:
+    enabled: true
+    queue_zhaobiao: zhaobiao:result:zhaobiao
+    queue_zhongbiao: zhaobiao:result:zhongbiao
+    attachment_dir_zhaobiao: /root/pachong/zhaobiao/data/附件
+    attachment_dir_zhongbiao: /root/pachong/zhaobiao/data_zb/附件
+
+# ============================== 非招标专区（3 栏） ==============================
+
+- id: ctgdzzb_fcg
+  enabled: true
+  name: 中国旅游集团电子招标采购平台-非招标专区-采购公告
+  entry_urls:
+    - https://dzzb.ctg.cn/cms/cmsfeicaigougg/index.html
+    - https://dzzb.ctg.cn/cms/cmsfeicaigougg/index_2.html
+    - https://dzzb.ctg.cn/cms/cmsfeicaigougg/index_3.html
+  schedule:
+    enabled: true
+    interval_seconds: 3600
+  limits:
+    max_concurrency: 2
+    request_interval_seconds: 0.5
+  request:
+    method: GET
+    headers:
+      Referer: https://dzzb.ctg.cn/cms/cmsfeicaigougg/index.html
+      Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8
+    params: {}
+    timeout_seconds: 40
+    retries: 2
+    retry_backoff_seconds: 0.8
+    verify_ssl: true
+  pagination:
+    mode: none
+    end_page: 1
+  crypto:
+    enabled: false
+  cookie:
+    enabled: false
+  dedup:
+    redis_hash_key: zhaobiao:domian:linkqc
+    ttl_days: 30
+    prune_probability: 0.01
+  list_extraction:
+    response_html_selectors: []
+    item_selectors:
+      - kind: xpath
+        expr: //div[contains(@class,"List2")]//ul/li
+    link_selectors:
+      - kind: xpath
+        expr: .//a[1]/@href
+    title_selectors:
+      - kind: xpath
+        expr: .//a[1]/@title
+      - kind: xpath
+        expr: .//a[1]//text()
+    date_selectors:
+      - kind: regex
+        expr: "发布时间：\\s*(\\d{4}-\\d{1,2}-\\d{1,2})"
+    min_title_length: 6
+    fallback_auto: false
+  detail_extraction:
+    response_html_selectors: []
+    content_selectors:
+      - kind: xpath
+        expr: //div[@class="Content"][1]
+    title_selectors:
+      - kind: xpath
+        expr: //h1[contains(@class,"TxtCenter")]//text()
+    date_selectors:
+      - kind: regex
+        expr: "发布时间：\\s*(\\d{4}/\\d{1,2}/\\d{1,2})"
+    fallback_auto: true
+    fallback_readability: true
+    min_content_length: 30
+  attachments:
+    enabled: true
+    selectors:
+      - kind: xpath
+        expr: //div[@class="Content"][1]//a[contains(@href,"app/file/download")]/@href
+    filename_selectors: []
+    allowed_extensions: []
+    max_bytes: 52428800
+  classification:
+    # 非招标方式（询比/询价/单源）采购公告，归招标侧
+    default_type: zhaobiao
+    zhongbiao_keywords: []
+  area_extraction:
+    enabled: false
+    use_title_first: true
+  output:
+    enabled: true
+    queue_zhaobiao: zhaobiao:result:zhaobiao
+    queue_zhongbiao: zhaobiao:result:zhongbiao
+    attachment_dir_zhaobiao: /root/pachong/zhaobiao/data/附件
+    attachment_dir_zhongbiao: /root/pachong/zhaobiao/data_zb/附件
+
+- id: ctgdzzb_fbg
+  enabled: true
+  name: 中国旅游集团电子招标采购平台-非招标专区-变更公告
+  entry_urls:
+    - https://dzzb.ctg.cn/cms/cmsfeibiangenggg/index.html
+    - https://dzzb.ctg.cn/cms/cmsfeibiangenggg/index_2.html
+    - https://dzzb.ctg.cn/cms/cmsfeibiangenggg/index_3.html
+  schedule:
+    enabled: true
+    interval_seconds: 3600
+  limits:
+    max_concurrency: 2
+    request_interval_seconds: 0.5
+  request:
+    method: GET
+    headers:
+      Referer: https://dzzb.ctg.cn/cms/cmsfeibiangenggg/index.html
+      Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8
+    params: {}
+    timeout_seconds: 40
+    retries: 2
+    retry_backoff_seconds: 0.8
+    verify_ssl: true
+  pagination:
+    mode: none
+    end_page: 1
+  crypto:
+    enabled: false
+  cookie:
+    enabled: false
+  dedup:
+    redis_hash_key: zhaobiao:domian:linkqc
+    ttl_days: 30
+    prune_probability: 0.01
+  list_extraction:
+    response_html_selectors: []
+    item_selectors:
+      - kind: xpath
+        expr: //div[contains(@class,"List2")]//ul/li
+    link_selectors:
+      - kind: xpath
+        expr: .//a[1]/@href
+    title_selectors:
+      - kind: xpath
+        expr: .//a[1]/@title
+      - kind: xpath
+        expr: .//a[1]//text()
+    date_selectors:
+      - kind: regex
+        expr: "发布时间：\\s*(\\d{4}-\\d{1,2}-\\d{1,2})"
+    min_title_length: 6
+    fallback_auto: false
+  detail_extraction:
+    response_html_selectors: []
+    content_selectors:
+      - kind: xpath
+        expr: //div[@class="Content"][1]
+    title_selectors:
+      - kind: xpath
+        expr: //h1[contains(@class,"TxtCenter")]//text()
+    date_selectors:
+      - kind: regex
+        expr: "发布时间：\\s*(\\d{4}/\\d{1,2}/\\d{1,2})"
+    fallback_auto: true
+    fallback_readability: true
+    min_content_length: 30
+  attachments:
+    enabled: true
+    selectors:
+      - kind: xpath
+        expr: //div[@class="Content"][1]//a[contains(@href,"app/file/download")]/@href
+    filename_selectors: []
+    allowed_extensions: []
+    max_bytes: 52428800
+  classification:
+    default_type: zhaobiao
+    zhongbiao_keywords: []
+  area_extraction:
+    enabled: false
+    use_title_first: true
+  output:
+    enabled: true
+    queue_zhaobiao: zhaobiao:result:zhaobiao
+    queue_zhongbiao: zhaobiao:result:zhongbiao
+    attachment_dir_zhaobiao: /root/pachong/zhaobiao/data/附件
+    attachment_dir_zhongbiao: /root/pachong/zhaobiao/data_zb/附件
+
+- id: ctgdzzb_fjg
+  enabled: true
+  name: 中国旅游集团电子招标采购平台-非招标专区-结果公告
+  entry_urls:
+    - https://dzzb.ctg.cn/cms/cmsfeijieguogg/index.html
+    - https://dzzb.ctg.cn/cms/cmsfeijieguogg/index_2.html
+    - https://dzzb.ctg.cn/cms/cmsfeijieguogg/index_3.html
+  schedule:
+    enabled: true
+    interval_seconds: 3600
+  limits:
+    max_concurrency: 2
+    request_interval_seconds: 0.5
+  request:
+    method: GET
+    headers:
+      Referer: https://dzzb.ctg.cn/cms/cmsfeijieguogg/index.html
+      Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8
+    params: {}
+    timeout_seconds: 40
+    retries: 2
+    retry_backoff_seconds: 0.8
+    verify_ssl: true
+  pagination:
+    mode: none
+    end_page: 1
+  crypto:
+    enabled: false
+  cookie:
+    enabled: false
+  dedup:
+    redis_hash_key: zhaobiao:domian:linkqc
+    ttl_days: 30
+    prune_probability: 0.01
+  list_extraction:
+    response_html_selectors: []
+    item_selectors:
+      - kind: xpath
+        expr: //div[contains(@class,"List2")]//ul/li
+    link_selectors:
+      - kind: xpath
+        expr: .//a[1]/@href
+    title_selectors:
+      - kind: xpath
+        expr: .//a[1]/@title
+      - kind: xpath
+        expr: .//a[1]//text()
+    date_selectors:
+      - kind: regex
+        expr: "发布时间：\\s*(\\d{4}-\\d{1,2}-\\d{1,2})"
+    min_title_length: 6
+    fallback_auto: false
+  detail_extraction:
+    response_html_selectors: []
+    content_selectors:
+      - kind: xpath
+        expr: //div[@class="Content"][1]
+    title_selectors:
+      - kind: xpath
+        expr: //h1[contains(@class,"TxtCenter")]//text()
+    date_selectors:
+      - kind: regex
+        expr: "发布时间：\\s*(\\d{4}/\\d{1,2}/\\d{1,2})"
+    fallback_auto: true
+    fallback_readability: true
+    min_content_length: 30
+  attachments:
+    enabled: true
+    selectors:
+      - kind: xpath
+        expr: //div[@class="Content"][1]//a[contains(@href,"app/file/download")]/@href
+    filename_selectors: []
+    allowed_extensions: []
+    max_bytes: 52428800
+  classification:
+    # 成交/询比结果公告，固定归中标侧
+    default_type: zhongbiao
+    zhongbiao_keywords: []
+  area_extraction:
+    enabled: false
+    use_title_first: true
+  output:
+    enabled: true
+    queue_zhaobiao: zhaobiao:result:zhaobiao
+    queue_zhongbiao: zhaobiao:result:zhongbiao
+    attachment_dir_zhaobiao: /root/pachong/zhaobiao/data/附件
+    attachment_dir_zhongbiao: /root/pachong/zhaobiao/data_zb/附件

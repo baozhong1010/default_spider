@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from typing import List, Set
 
 from lxml import etree
+from lxml.cssselect import CSSSelector
 from readability import Document
 
 from spider.config.models import AttachmentConfig, DetailExtractionConfig
@@ -87,14 +88,44 @@ class DetailExtractor(object):
     @staticmethod
     def _strip_noise_nodes(node):
         # type: (etree._Element) -> None
-        # 剥离 script/style/注释等非正文节点（如详情页把公告元信息写进 <script> 的情况）
+        # 剥离 script/style/link/meta/注释等非正文节点
+        # （如详情页把公告元信息写进 <script>，或正文容器里挂着 <link rel=stylesheet>）
         try:
-            for bad in node.xpath(".//script | .//style | .//comment()"):
+            for bad in node.xpath(".//script | .//style | .//link | .//meta | .//comment()"):
                 parent = bad.getparent()
                 if parent is not None:
                     parent.remove(bad)
         except Exception:
             pass
+
+    @staticmethod
+    def _strip_excluded_nodes(node, selectors):
+        # type: (etree._Element, List) -> None
+        # 站点广告/引流/相关推荐块：在序列化正文前整体删掉，避免混入「正文内容」并污染分类关键词。
+        # xpath 以 // 开头时 lxml 会扩大到整篇文档，这里统一加 "." 前缀限定在正文节点内。
+        for selector in selectors or []:
+            expr = (selector.expr or "").strip()
+            if not expr:
+                continue
+            targets = []
+            try:
+                if selector.kind == "xpath":
+                    if expr.startswith("."):
+                        scoped = expr
+                    elif expr.startswith("/"):
+                        scoped = "." + expr
+                    else:
+                        scoped = ".//" + expr
+                    targets = node.xpath(scoped)
+                elif selector.kind == "css":
+                    targets = CSSSelector(expr)(node)
+            except Exception:
+                targets = []
+            for target in targets:
+                if isinstance(target, etree._Element):
+                    parent = target.getparent()
+                    if parent is not None:
+                        parent.remove(target)
 
     def _extract_title_by_rules(self, tree, html_text):
         # type: (etree._Element, str) -> str
@@ -122,6 +153,7 @@ class DetailExtractor(object):
                 node = nodes[0]
                 if isinstance(node, etree._Element):
                     self._strip_noise_nodes(node)
+                    self._strip_excluded_nodes(node, self.detail_cfg.exclude_selectors)
                     return etree.tostring(node, encoding="unicode", method="html")
             values = apply_selector(selector=selector, context=tree, html_text=html_text)
             if values:

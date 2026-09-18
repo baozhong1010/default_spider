@@ -1,0 +1,553 @@
+# =============================================================================
+# 优质采（youzhicai.com）中粮招标采购专区  ——  https://zlcgzq.youzhicai.com/
+#
+# 平台 / 专区识别
+# -----------------------------------------------------------------------------
+# 优质采（youzhicai.com）是第三方电子招标投标与采购交易平台。
+# 本专区 <title> =「中粮招标采购专区-优质采电子招标投标与采购平台」，
+# meta keywords =「中粮招标采购专区,中粮招标招标信息,中粮招标采购信息」。
+# 即**中粮集团（COFCO）的电子招标采购专区**，按成员企业（中粮生物科技、
+# 中粮生化能源、吉林燃料乙醇、中粮黑龙江酿酒、安徽中粮油脂 …）分区发布公告。
+# 同平台还有大量 <企业简称>.youzhicai.com 子域（gxswzny / ljgs / zlahsh /
+# jlbz / jilinranliaoyichun …），每个子域是**各自独立的专区、独立的 Laravel
+# 会话**；本文件只覆盖 zlcgzq 这一个专区。
+#
+# 本机网络前提（仅影响本机测试，与配置无关）
+# -----------------------------------------------------------------------------
+# 实测：直连该站 HTTP 200 / 236,648 字节（0.48s）；
+# 走系统代理 127.0.0.1:7890 时 Python urllib（会读注册表代理设置）握手超时，
+# 列表页取不到。**配置里不放代理开关**，本机自测统一直连：
+# 分析/测试阶段用 curl.exe --noproxy "*"，或临时设 no_proxy=* 关掉代理再跑；
+# 生产服务器无代理，不受影响。
+#
+# 列表：纯 AJAX，服务端不渲染任何公告行
+# -----------------------------------------------------------------------------
+# /newTopic/purchase.html?type=N 的 HTML 里**一行公告都没有**（各 type 的 HTML
+# 都是 27,374 字节的同一个空壳），列表由 /newtopic/js/purchase_list.js 的
+# init_data(pageIndex) 异步拉取：
+#     POST /newtopic/data-list   (application/x-www-form-urlencoded) → JSON
+# 三栏导航（见首页 .navbar）与对应参数：
+#     type=1 → 「招标信息」   含 noticeType 1 招标公告 + 3 中标候选人公示
+#     type=2 → 「非招标信息」 含 noticeType 1 采购公告 + 2 结果公示
+#     type=3 → 「结果公示」   页面把 type 转成 "1,2"，只返回 noticeType 2
+#
+# ● 分页：每页固定 10 条，参数名 pageIndex（1 起，正好对齐 {page}）。
+# ● 硬上限：三栏 total 都恒等于 1000（服务端封顶）。
+#   pageIndex 1..100 覆盖 1000 条；越界（pageIndex=999）返回 200 +
+#   {"list":null,"total":0}，不报错也不重复，端页取满安全。
+# ● 响应字段（本配置实际用到）：
+#     noticeTitle  标题（完整，未截断）
+#     Url          详情链接 /newTopic/NoticeDetail.html?id=<uuid>&n=<1|2>
+#     createTime   ISO 形如 2024-06-21T08:51:10.1626156+08:00
+#     province     省份（安徽省 / 河北省 / 广西壮族自治区 …）
+# ● 响应体开头有 1~2 个 UTF-8 BOM（json.loads 会直接抛
+#   "Unexpected UTF-8 BOM"）→ 用 response_html_selectors 的 regex 先剥掉。
+#
+# ⚠ 唯一阻断点：data-list 需要「会话绑定的 CSRF 令牌」
+# -----------------------------------------------------------------------------
+# 该 POST 走 Laravel web 中间件组、有 CSRF 校验。无令牌时**所有** POST 都被
+# VerifyCsrfToken 拦成 HTTP 500 +「页面不存在」——所以 500 既可能是路由不存在
+# 也可能是 CSRF 失败，不能靠状态码判断路由（实测 /newtopic/xyz-qwerty 这种
+# 纯瞎编的 POST 也是 500）。实测矩阵（每项只改一个变量）：
+#   同会话：栏目页 meta token → X-CSRF-TOKEN 回传 ............ 200 ✅
+#   同会话：X-XSRF-TOKEN = XSRF-TOKEN cookie 的 URL 解码值 .... 200 ✅
+#   X-XSRF-TOKEN = 该 cookie 的 URL 编码原值 ................. 500 ❌
+#   完全不带令牌 ............................................. 500 ❌
+#   _token 放 POST body 里 ................................... 500 ❌
+#   令牌来自**另一个会话**（即随便写死一枚）.................. 500 ❌
+#   同会话内跨多次页面刷新 / 跨多次 POST 令牌仍有效 ........... 200 ✅
+#     （同会话内 laravel_session 每次页面请求都会轮换，
+#       但令牌不随之失效 —— 所以「令牌 + 会话」只要同源就一直可用。）
+#
+# ★ 结论与绕行：框架目前**无法把 HTML 里取到的令牌回填进请求头**，因此下面
+#   把「一次性抓好的 (X-CSRF-TOKEN 令牌, laravel_session cookie) 配对」写进
+#   request.headers。二者必须同源，否则 500。
+#   ● 令牌 = 栏目页 <meta name="csrf-token" content="..."> 的值；
+#     cookie = 同一次响应下发的 laravel_session。
+#   ● 失效后需人工重抓（刷新步骤见 search_website/yzc_notes.md）。
+#   ● 这是本配置唯一的脆弱点，运维务必留意。
+#
+# ★ 为什么拆成 3 个配置（而不是 1 个多 entry_urls）
+#   pagination.mode: data_template 只支持 {page}/{page_index}/{base_url}/{random}
+#   四个占位符，而 {base_url} 渲染出来是**整条 entry_url**
+#   （如 https://…/purchase.html?type=1）而不是栏目号 type，
+#   把它塞进 type 字段服务端解析不出栏目 → 实测直接 500（页面不存在）。
+#   因此每个栏目一个配置，各自把 type 写成字面量。
+#
+# 详情页：真正文在 iframe 里，必须直取 iframe
+# -----------------------------------------------------------------------------
+# /newTopic/NoticeDetail.html?id=..&n=.. 只是空壳（15,273 字节，所有公告长度
+# 完全一致），里面是
+#   <iframe id="mainFrame" src="//www.youzhicai.com/msnotice/NoticeIndexCompany
+#                                  ?id=<uuid>&noticeCateId=<1|2>&color=">
+# 实测 noticeCateId 传 1 或 2 返回内容逐字节相同，故固定写 1；不传该参数会
+# 返回空正文，所以必须带。
+# → 用 list_extraction.detail_url_template 直接把 iframe 绝对地址当成
+#   item.url（{link} 取 JSON 的 Url 原值，urljoin 以接口响应地址为基准）。
+#   ⚠ id 参数值**必须只有 uuid**：把整条 /newTopic/NoticeDetail.html?...&n=2
+#     一起传进去，服务端会 302 到 https://www.youzhicai.com/s/0_0_0_0_.html
+#     （首页兜底页），实测 percent-encode、换分隔符等 4 种写法全部失败。
+#   该 iframe 接口**匿名可访问、不需要 CSRF**。
+#
+# 正文 / 标题 / 日期（两种版式，同一套 XPath 都命中）
+#   <h1 class="yzc-notice-title">完整标题</h1>
+#   发布时间：2024/7/2 18:13:58      ← 无 id 的 div 里，用 regex 取
+#   <div class="bulletin-detail">正文</div>   ← 唯一正文容器
+#
+# 附件：JS 函数 + 无后缀 UUID，框架 3 个内置能力正好全用上
+#   正文下方 <div class="attach"> 内是
+#     <a href="javascript:void(0);"
+#        onclick="downAttFile1('c5a60716-59d0-4f58-86db-7efcce12e4ce');">xxx.doc</a>
+#   href 是 javascript:void(0)，真实下载口是
+#     https://file.youzhicai.com/SingleDown/<fileid>?token=
+#   实测匿名 GET：HTTP 200 / 18,944 字节 / Content-Type application/msword /
+#   文件头 D0CF11E0（OLE2 复合文档，真 .doc）→ 用 attachments.url_template
+#   拼出来即可（token 传空也照样给文件）。
+#   ● allowed_extensions 必须留空：URL 结尾是 36 位 UUID、没有 .doc/.pdf
+#     后缀，框架的 endswith 判断会把附件全部过滤掉。
+#   ● filename_selectors 留空：让框架按响应 Content-Disposition 还原中文真实
+#     文件名（实测服务端回的是百分号编码的中文名）。
+#   ● 实测本专区**绝大多数公告无附件**（页面直接写「无附件」），
+#     少数采购/招标公告带 1 个 .doc 附件。
+#
+# 分类
+#   招标信息 / 非招标信息两栏是**混合栏目**（同栏内既有招标公告又有候选人公示
+#   和结果公示），保留 zhongbiao_keywords 关键词自动分流；
+#   结果公示栏整栏都是结果类，栏目即分类 → zhongbiao_keywords: []。
+# =============================================================================
+
+- id: yzc_zhaobiao
+  enabled: true
+  name: 优质采-中粮招标采购专区-招标信息
+
+  # data_template 模式下 entry_url 本身不提供请求地址/请求体（分别由
+  # url_template / data_template 生成），列出仅为 Referer 语义与排障对号入座。
+  entry_urls:
+    - https://zlcgzq.youzhicai.com/newTopic/purchase.html?type=1
+
+  schedule:
+    enabled: true
+    interval_seconds: 3600
+
+  limits:
+    max_concurrency: 3
+    request_interval_seconds: 0.5
+
+  request:
+    method: POST
+    headers:
+      Accept: application/json, text/javascript, */*; q=0.01
+      Content-Type: application/x-www-form-urlencoded; charset=UTF-8
+      X-Requested-With: XMLHttpRequest
+      Referer: https://zlcgzq.youzhicai.com/newTopic/purchase.html?type=1
+      # 曾把 (X-CSRF-TOKEN, laravel_session) 写死在这里，但该会话 Max-Age 只有 2 小时，
+      # 会周期性失效；现改为下面的 token_bootstrap：每轮先抓一次栏目页、
+      # 正则取出 meta 里的令牌并自动加到列表/详情请求头，会话 Cookie 由 CookieJar 自动维护。
+    params: {}
+    timeout_seconds: 40
+    retries: 2
+    retry_backoff_seconds: 0.8
+    verify_ssl: false
+    # 令牌自举：先抓栏目页，从 <meta name="csrf-token" content="..."> 取令牌，
+    # 自动写入 X-CSRF-TOKEN 请求头（列表/详情通用）；无需再手工维护会话。
+    token_bootstrap:
+      url: "https://zlcgzq.youzhicai.com/newTopic/purchase.html?type=1"
+      expr: 'name="csrf-token"\s+content="([^"]+)"'
+      header: X-CSRF-TOKEN
+
+  pagination:
+    mode: url_template
+    start_page: 1
+    end_page: 3
+    # 分页参数（pageIndex / id / type）全部写在 URL query 里 —— 实测服务端
+    # 对 query 形式的 pageIndex/type 解析完全正常（pageIndex=1/2/3 分别返回
+    # 2025-03-19 / 2023-10-27 / 2023-03-17 三批不同数据）。
+    # 之所以不用 pagination.mode: data_template：框架 build_list_request_tasks
+    # 在 data_template 模式下**完全忽略 url_template**，会把 POST 打到 entry_url
+    # （栏目页 purchase.html）上 —— 实测 4 个请求全部 500。
+    # 每页 URL 天然不同，同时也避开了引擎 queued_detail_urls 的 URL 去重。
+    # 服务端 total 封顶 1000；要抓满可把 end_page 调到 100
+    # （安全上限，pageIndex 越界返回 {"list":null,"total":0}，不报错）。
+    # type=1「招标信息」：含招标公告 + 中标候选人公示。
+    url_template: "https://zlcgzq.youzhicai.com/newtopic/data-list?pageIndex={page}&id=9C0D24F7-C591-619B-99EF-F1D65D3F6A6E&type=1"
+
+  crypto:
+    enabled: false
+
+  cookie:
+    # 会话 cookie 实测跨请求长期有效，直接写死在 request.headers，
+    # 不走 Redis（local_test / 生产都能开箱即用）
+    enabled: false
+
+  dedup:
+    redis_hash_key: zhaobiao:domian:linkqc
+    ttl_days: 30
+    prune_probability: 0.01
+
+  list_extraction:
+    # 响应是 JSON 且带 1~2 个 UTF-8 BOM → 先 regex 剥出 JSON 主体
+    # （实测这 1 个 regex 能同时清掉两个 BOM，因为 BOM 匹配 \s）
+    response_html_selectors:
+      - kind: regex
+        expr: '\{\s*"list"[\s\S]*\}'
+    item_selectors:
+      - kind: jsonpath
+        expr: $.list[*]
+    link_selectors:
+      # JSON 的 Url 字段（相对路径，含 &n=1 / &n=2），
+      # 由 detail_url_template 转成 iframe 绝对地址
+      - kind: jsonpath
+        expr: $.Url
+    title_selectors:
+      # noticeTitle 是完整标题（只有列表页显示时才截断加省略号）
+      - kind: jsonpath
+        expr: $.noticeTitle
+    date_selectors:
+      # ISO 串；helpers.normalize_date_yyyy_mm_dd 的兜底正则能取到 YYYY-MM-DD
+      - kind: jsonpath
+        expr: $.createTime
+    area_selectors:
+      # 列表自带省份，优先于标题/正文启发式
+      - kind: jsonpath
+        expr: $.province
+    # ★ 详情正文接口地址在这里生成。list_extractor._format_detail_url 会把 JSON 的
+    #   每个键（fields.update(node)）连同 {link}/{value} 一起暴露给模板，所以能
+    #   直接用 JSON 自带的 {noticeId}（**裸 uuid**）。
+    #   为什么必须是裸 uuid —— 实测该接口的 id 只认 uuid 形态：
+    #     id=<uuid> .............................. 200，正文 ~2500 字 ✅
+    #     id=<uuid>&n=1 .......................... 200，正文 ~2500 字 ✅
+    #     id=/newTopic/NoticeDetail.html?id=<uuid>&n=1 ... 302 → /s/0_0_0_0_.html ❌
+    #     id=<完整 http URL> ..................... 302 → /s/0_0_0_0_.html ❌
+    #   少带 &noticeCateId= 同样会 302 到兜底首页，所以必须带（1 或 2 内容逐字节相同）。
+    #   生成结果即 item.url；本配置**不设置** detail_request.url_template，
+    #   引擎在 detail_request 全为空时会直接用 item.url 抓详情（engine.py 里
+    #   detail_url = item.url 的默认分支），因此 iframe 地址就是真正被请求的地址。
+    #   代价：payload「原文链接」存的是这个接口地址，而不是人们习惯的外壳页
+    #   https://zlcgzq.youzhicai.com/newTopic/NoticeDetail.html?id=<uuid>&n=<n>
+    #   （该外壳页只有 iframe、没有正文，点开也会落到同一个 200 接口）。
+    detail_url_template: "https://www.youzhicai.com/msnotice/NoticeIndexCompany?id={noticeId}&noticeCateId=1&color="
+    min_title_length: 6
+    fallback_auto: false
+
+  detail_extraction:
+    response_html_selectors: []
+    content_selectors:
+      # 唯一正文容器；实测三种版式（招标公告/候选人公示/结果公示）都命中
+      - kind: xpath
+        expr: //div[contains(@class, "bulletin-detail")]
+    title_selectors:
+      # 详情页完整标题（列表标题本就完整，这里只作回填兜底）
+      - kind: xpath
+        expr: //h1[contains(@class, "yzc-notice-title")]//text()
+    date_selectors:
+      # 「发布时间：2024/7/2 18:13:58」→ regex 直接归一成 YYYY-MM-DD
+      - kind: regex
+        expr: '发布时间：\s*(\d{4}/\d{1,2}/\d{1,2})'
+    fallback_auto: true
+    fallback_readability: true
+    min_content_length: 30
+
+  attachments:
+    enabled: true
+    # 从 onclick="downAttFile1('<uuid>');" 抠出 fileid（36 位 UUID）
+    selectors:
+      - kind: regex
+        expr: 'downAttFile1(?:New)?\(\s*[''""]([0-9a-fA-F-]{36})[''""]'
+    # 留空：让框架按响应 Content-Disposition 还原中文真实文件名
+    # （配了会与 selectors 按下标对齐，正文外链会把它顶错位）
+    filename_selectors: []
+    url_template: "https://file.youzhicai.com/SingleDown/{value}?token="
+    # 必须留空：下载 URL 结尾是 UUID、没有扩展名，配了会把附件全过滤掉
+    allowed_extensions: []
+    reject_login_pages: true
+    max_bytes: 52428800
+
+  classification:
+    # 本栏是混合栏目（招标公告 + 中标候选人公示），保留关键词自动分流
+    default_type: zhaobiao
+    # 注意：分类是**子串**匹配（spider/pipeline/classify.py 里就是 keyword in merged），
+    # 所以别加「评标」——它会命中「竞**价**采购公告」里的「价」，
+    # 实测把 4 条竞价采购公告误判成 zhongbiao。
+    zhongbiao_keywords: ["中标", "成交", "结果", "合同", "废标", "终止", "候选人"]
+
+  area_extraction:
+    # 列表自带 province（安徽省 / 广西壮族自治区 …），比标题启发式更准
+    enabled: true
+    use_title_first: false
+
+  output:
+    enabled: true
+    queue_zhaobiao: zhaobiao:result:zhaobiao
+    queue_zhongbiao: zhaobiao:result:zhongbiao
+    attachment_dir_zhaobiao: /root/pachong/zhaobiao/data/附件
+    attachment_dir_zhongbiao: /root/pachong/zhaobiao/data_zb/附件
+
+- id: yzc_feizhaobiao
+  enabled: true
+  name: 优质采-中粮招标采购专区-非招标信息
+
+  entry_urls:
+    - https://zlcgzq.youzhicai.com/newTopic/purchase.html?type=2
+
+  schedule:
+    enabled: true
+    interval_seconds: 3600
+
+  limits:
+    max_concurrency: 3
+    request_interval_seconds: 0.5
+
+  request:
+    method: POST
+    headers:
+      Accept: application/json, text/javascript, */*; q=0.01
+      Content-Type: application/x-www-form-urlencoded; charset=UTF-8
+      X-Requested-With: XMLHttpRequest
+      Referer: https://zlcgzq.youzhicai.com/newTopic/purchase.html?type=2
+    params: {}
+    timeout_seconds: 40
+    retries: 2
+    retry_backoff_seconds: 0.8
+    verify_ssl: false
+    # 令牌自举：先抓栏目页，从 <meta name="csrf-token" content="..."> 取令牌，
+    # 自动写入 X-CSRF-TOKEN 请求头（列表/详情通用）；无需再手工维护会话。
+    token_bootstrap:
+      url: "https://zlcgzq.youzhicai.com/newTopic/purchase.html?type=1"
+      expr: 'name="csrf-token"\s+content="([^"]+)"'
+      header: X-CSRF-TOKEN
+
+  pagination:
+    mode: url_template
+    start_page: 1
+    end_page: 3
+    # type=2「非招标信息」：询价/竞价/谈判采购公告 + 结果公示。
+    # （分页写法说明见 yzc_zhaobiao 的 pagination 注释）
+    url_template: "https://zlcgzq.youzhicai.com/newtopic/data-list?pageIndex={page}&id=9C0D24F7-C591-619B-99EF-F1D65D3F6A6E&type=2"
+
+  crypto:
+    enabled: false
+
+  cookie:
+    enabled: false
+
+  dedup:
+    redis_hash_key: zhaobiao:domian:linkqc
+    ttl_days: 30
+    prune_probability: 0.01
+
+  list_extraction:
+    response_html_selectors:
+      - kind: regex
+        expr: '\{\s*"list"[\s\S]*\}'
+    item_selectors:
+      - kind: jsonpath
+        expr: $.list[*]
+    link_selectors:
+      - kind: jsonpath
+        expr: $.Url
+    title_selectors:
+      - kind: jsonpath
+        expr: $.noticeTitle
+    date_selectors:
+      - kind: jsonpath
+        expr: $.createTime
+    area_selectors:
+      - kind: jsonpath
+        expr: $.province
+    # ★ 详情正文接口地址在这里生成。list_extractor._format_detail_url 会把 JSON 的
+    #   每个键（fields.update(node)）连同 {link}/{value} 一起暴露给模板，所以能
+    #   直接用 JSON 自带的 {noticeId}（**裸 uuid**）。
+    #   为什么必须是裸 uuid —— 实测该接口的 id 只认 uuid 形态：
+    #     id=<uuid> .............................. 200，正文 ~2500 字 ✅
+    #     id=<uuid>&n=1 .......................... 200，正文 ~2500 字 ✅
+    #     id=/newTopic/NoticeDetail.html?id=<uuid>&n=1 ... 302 → /s/0_0_0_0_.html ❌
+    #     id=<完整 http URL> ..................... 302 → /s/0_0_0_0_.html ❌
+    #   少带 &noticeCateId= 同样会 302 到兜底首页，所以必须带（1 或 2 内容逐字节相同）。
+    #   生成结果即 item.url；本配置**不设置** detail_request.url_template，
+    #   引擎在 detail_request 全为空时会直接用 item.url 抓详情（engine.py 里
+    #   detail_url = item.url 的默认分支），因此 iframe 地址就是真正被请求的地址。
+    #   代价：payload「原文链接」存的是这个接口地址，而不是人们习惯的外壳页
+    #   https://zlcgzq.youzhicai.com/newTopic/NoticeDetail.html?id=<uuid>&n=<n>
+    #   （该外壳页只有 iframe、没有正文，点开也会落到同一个 200 接口）。
+    detail_url_template: "https://www.youzhicai.com/msnotice/NoticeIndexCompany?id={noticeId}&noticeCateId=1&color="
+    min_title_length: 6
+    fallback_auto: false
+
+  detail_extraction:
+    response_html_selectors: []
+    content_selectors:
+      - kind: xpath
+        expr: //div[contains(@class, "bulletin-detail")]
+    title_selectors:
+      - kind: xpath
+        expr: //h1[contains(@class, "yzc-notice-title")]//text()
+    date_selectors:
+      - kind: regex
+        expr: '发布时间：\s*(\d{4}/\d{1,2}/\d{1,2})'
+    fallback_auto: true
+    fallback_readability: true
+    min_content_length: 30
+
+  attachments:
+    enabled: true
+    selectors:
+      - kind: regex
+        expr: 'downAttFile1(?:New)?\(\s*[''""]([0-9a-fA-F-]{36})[''""]'
+    filename_selectors: []
+    url_template: "https://file.youzhicai.com/SingleDown/{value}?token="
+    allowed_extensions: []
+    reject_login_pages: true
+    max_bytes: 52428800
+
+  classification:
+    # 本栏同样混合（采购/询价公告 + 结果公示），保留关键词自动分流
+    default_type: zhaobiao
+    # 注意：分类是**子串**匹配（spider/pipeline/classify.py 里就是 keyword in merged），
+    # 所以别加「评标」——它会命中「竞**价**采购公告」里的「价」，
+    # 实测把 4 条竞价采购公告误判成 zhongbiao。
+    zhongbiao_keywords: ["中标", "成交", "结果", "合同", "废标", "终止", "候选人"]
+
+  area_extraction:
+    enabled: true
+    use_title_first: false
+
+  output:
+    enabled: true
+    queue_zhaobiao: zhaobiao:result:zhaobiao
+    queue_zhongbiao: zhaobiao:result:zhongbiao
+    attachment_dir_zhaobiao: /root/pachong/zhaobiao/data/附件
+    attachment_dir_zhongbiao: /root/pachong/zhaobiao/data_zb/附件
+
+- id: yzc_jieguo
+  enabled: true
+  name: 优质采-中粮招标采购专区-结果公示
+
+  entry_urls:
+    - https://zlcgzq.youzhicai.com/newTopic/purchase.html?type=3
+
+  schedule:
+    enabled: true
+    interval_seconds: 3600
+
+  limits:
+    max_concurrency: 3
+    request_interval_seconds: 0.5
+
+  request:
+    method: POST
+    headers:
+      Accept: application/json, text/javascript, */*; q=0.01
+      Content-Type: application/x-www-form-urlencoded; charset=UTF-8
+      X-Requested-With: XMLHttpRequest
+      Referer: https://zlcgzq.youzhicai.com/newTopic/purchase.html?type=3
+    params: {}
+    timeout_seconds: 40
+    retries: 2
+    retry_backoff_seconds: 0.8
+    verify_ssl: false
+    # 令牌自举：先抓栏目页，从 <meta name="csrf-token" content="..."> 取令牌，
+    # 自动写入 X-CSRF-TOKEN 请求头（列表/详情通用）；无需再手工维护会话。
+    token_bootstrap:
+      url: "https://zlcgzq.youzhicai.com/newTopic/purchase.html?type=1"
+      expr: 'name="csrf-token"\s+content="([^"]+)"'
+      header: X-CSRF-TOKEN
+
+  pagination:
+    mode: url_template
+    start_page: 1
+    end_page: 3
+    # type=1%2C2「结果公示」：栏目页把 type 转成 "1,2"（见 purchase_list.js
+    # 里 isResultNotice 的注释），实测该取值只返回 noticeType 2（结果公示）。
+    # 逗号用 %2C 写，实测返回 total=1000 正常。
+    url_template: "https://zlcgzq.youzhicai.com/newtopic/data-list?pageIndex={page}&id=9C0D24F7-C591-619B-99EF-F1D65D3F6A6E&type=1%2C2"
+
+  crypto:
+    enabled: false
+
+  cookie:
+    enabled: false
+
+  dedup:
+    redis_hash_key: zhaobiao:domian:linkqc
+    ttl_days: 30
+    prune_probability: 0.01
+
+  list_extraction:
+    response_html_selectors:
+      - kind: regex
+        expr: '\{\s*"list"[\s\S]*\}'
+    item_selectors:
+      - kind: jsonpath
+        expr: $.list[*]
+    link_selectors:
+      - kind: jsonpath
+        expr: $.Url
+    title_selectors:
+      - kind: jsonpath
+        expr: $.noticeTitle
+    date_selectors:
+      - kind: jsonpath
+        expr: $.createTime
+    area_selectors:
+      - kind: jsonpath
+        expr: $.province
+    # ★ 详情正文接口地址在这里生成。list_extractor._format_detail_url 会把 JSON 的
+    #   每个键（fields.update(node)）连同 {link}/{value} 一起暴露给模板，所以能
+    #   直接用 JSON 自带的 {noticeId}（**裸 uuid**）。
+    #   为什么必须是裸 uuid —— 实测该接口的 id 只认 uuid 形态：
+    #     id=<uuid> .............................. 200，正文 ~2500 字 ✅
+    #     id=<uuid>&n=1 .......................... 200，正文 ~2500 字 ✅
+    #     id=/newTopic/NoticeDetail.html?id=<uuid>&n=1 ... 302 → /s/0_0_0_0_.html ❌
+    #     id=<完整 http URL> ..................... 302 → /s/0_0_0_0_.html ❌
+    #   少带 &noticeCateId= 同样会 302 到兜底首页，所以必须带（1 或 2 内容逐字节相同）。
+    #   生成结果即 item.url；本配置**不设置** detail_request.url_template，
+    #   引擎在 detail_request 全为空时会直接用 item.url 抓详情（engine.py 里
+    #   detail_url = item.url 的默认分支），因此 iframe 地址就是真正被请求的地址。
+    #   代价：payload「原文链接」存的是这个接口地址，而不是人们习惯的外壳页
+    #   https://zlcgzq.youzhicai.com/newTopic/NoticeDetail.html?id=<uuid>&n=<n>
+    #   （该外壳页只有 iframe、没有正文，点开也会落到同一个 200 接口）。
+    detail_url_template: "https://www.youzhicai.com/msnotice/NoticeIndexCompany?id={noticeId}&noticeCateId=1&color="
+    min_title_length: 6
+    fallback_auto: false
+
+  detail_extraction:
+    response_html_selectors: []
+    content_selectors:
+      - kind: xpath
+        expr: //div[contains(@class, "bulletin-detail")]
+    title_selectors:
+      - kind: xpath
+        expr: //h1[contains(@class, "yzc-notice-title")]//text()
+    date_selectors:
+      - kind: regex
+        expr: '发布时间：\s*(\d{4}/\d{1,2}/\d{1,2})'
+    fallback_auto: true
+    fallback_readability: true
+    min_content_length: 30
+
+  attachments:
+    enabled: true
+    selectors:
+      - kind: regex
+        expr: 'downAttFile1(?:New)?\(\s*[''""]([0-9a-fA-F-]{36})[''""]'
+    filename_selectors: []
+    url_template: "https://file.youzhicai.com/SingleDown/{value}?token="
+    allowed_extensions: []
+    reject_login_pages: true
+    max_bytes: 52428800
+
+  classification:
+    # 整栏都是结果类公告（结果公示/成交公示），栏目即分类，不做关键词分流
+    default_type: zhongbiao
+    zhongbiao_keywords: []
+
+  area_extraction:
+    enabled: true
+    use_title_first: false
+
+  output:
+    enabled: true
+    queue_zhaobiao: zhaobiao:result:zhaobiao
+    queue_zhongbiao: zhaobiao:result:zhongbiao
+    attachment_dir_zhaobiao: /root/pachong/zhaobiao/data/附件
+    attachment_dir_zhongbiao: /root/pachong/zhaobiao/data_zb/附件
