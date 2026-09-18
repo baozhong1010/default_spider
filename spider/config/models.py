@@ -217,6 +217,11 @@ class AttachmentConfig(BaseModel):
 
 class ClassificationConfig(BaseModel):
     default_type: Literal["zhaobiao", "zhongbiao"] = "zhaobiao"
+    # 只按标题判定：正文（尤其中介/聚合站与 CMS 模板生成的公告）里常出现「未来时态」的结果词，
+    # 例如「电商平台将发布竞价交易结果公告」「确定1名成交供应商」「支付 90% 的合同金额」，
+    # 会把**招标公告**误判成中标。这类站点的标题本身就带结论（…采购公告 / …结果公告 /
+    # …评审结果公示），设为 true 后正文不再参与关键词匹配。
+    title_only: bool = False
     zhongbiao_keywords: List[str] = Field(
         default_factory=lambda: ["中标", "成交", "结果", "合同", "废标", "终止", "候选人"]
     )

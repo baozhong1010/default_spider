@@ -1,0 +1,220 @@
+# =============================================================================
+# 神火集团电子商务平台 —— 公告信息（全平台招标/中标汇总）
+#   https://www.shzbpt.com/jiaoyi/index.jhtml
+#
+# 平台识别
+# -----------------------------------------------------------------------------
+# <title> =「公告信息-神火电子商务平台」；页脚「河南神火煤电股份有限公司」，
+# 技术支持落款「郑州信源信息技术股份有限公司」。
+# 域名 shzbpt = **神火招标平台**（不是"上海招标平台"，注意别按拼音误判）。
+# 平台技术栈：jeecms 系 CMS（`/r/cms/www/red/`、`.jhtml` 后缀、`/search.jspx`、JSESSIONID），
+# **服务端渲染**、匿名可访问、无验证码/无 JS 挑战/无加密接口。
+#
+# 为什么用 /jiaoyi/ 一个页面覆盖全站
+# -----------------------------------------------------------------------------
+# `/jiaoyi/index.jhtml` 是**全平台公告汇总页**（共 87,964 条 / 8,797 页，每页 10 条），
+# 实测总量 = 各频道之和：
+#     设备 2,059 + 物资 78,817 + 工程 2,615 + 服务 3,228 + 销售 1,245 = 87,964 ✓
+# 因此一个站点就能拿到「所有频道 × 所有采购方式」的招标与结果公告，无需按栏目拆 20+ 个站点。
+# 平台栏目树（供后续需要按栏目细化时参考，结构同构，只需换频道路径）：
+#   设备频道：/szbcg/ 招标采购  /sxjcg/ 询比采购  /stpcg/ 谈判采购  /sjjcg/ 竞价采购(空)
+#   物资频道：/wzbcg/          /wxjcg/          /wtpcg/          /wjjcg/
+#   工程频道：/gzbcg/          /gxjcg/          /gtpcg/          /gjjcg/(空)
+#   服务频道：/fzbcg/          /fxjcg/          /ftpcg/          /fjjcg/
+#   销售频道：/xsjjgg/ 竞价公告  /xscjgg/ 成交公告  /xbggga/ 变更公告  /xslpgg/ 流拍公告(空)
+#   其余单栏目：/wxzbgg/ 采购公告(46,853)  /wxzbggg/ 采购结果公告(29,976)
+#
+# 列表页结构（/jiaoyi/index.jhtml 与 /jiaoyi/index_N.jhtml）
+# -----------------------------------------------------------------------------
+#   <div class="List2 Top5">
+#     <ul>
+#       <li>
+#         <a href="http://www.shzbpt.com:80/wxzbggg/100606.jhtml">……结果公告</a>
+#         <p><span class="Right10">所属栏目：<span><a class="Orange">采购结果公告</a></span></span>
+#            <span class="Right10">浏览次数：<span class="Blue">0</span></span>
+#            <span class="Gray Right">发布时间：2026-09-18 11:10:49</span></p>
+#       </li> …
+#   · ⚠ 每个 <li> 里有**两个 <a>**：详情链接（li 的直接子节点）与「所属栏目」链接（在 <p> 里）。
+#     故 link_selectors 用直接子节点 `a/@href`（不是 `.//a/@href`），避免抓到栏目首页。
+#   · ⚠ 列表标题**会被截断**（尾部「...」，实测 100 条中 4 条），必须靠详情 h1 回填标题，
+#     否则「…结果公告」被截成「…采购 （神火新材、阳光铝材）...」时分类会漏判（实测漏判 1 条）。
+#   · 分页：`index_N.jhtml`，实测 `index_1.jhtml` 与 `index.jhtml` **内容完全一致**（都是第 1 页），
+#     故 url_template 的 {page} 从 1 起可直接用。
+#   · ⚠ 越界页静默回落到末页：`index_8798.jhtml`、`index_99999.jhtml` 都返回第 8797 页内容（不报错），
+#     所以 end_page 别超过 8797；本配置取前 3 页 = 每轮 30 条，新公告从头部插入，靠 dedup 增量。
+#
+# 详情页结构（/{栏目}/{id}.jhtml）
+# -----------------------------------------------------------------------------
+#   <h1 class="TxtCenter Top10">标题</h1>
+#   <div class="TxtCenter Gray BorderTopDot …">发布时间： 2026-09-18 10:55:27  作者：本站编辑  浏览次数：…</div>
+#   <div class="Content" style="min-height:500px; padding:0 30px;">正文（含物资明细表格）</div>
+#   <ul>上一篇 / 下一篇</ul>   <div class="Title01"><h2>相关公告</h2></div>   ← 都在 div.Content 之外，不会混入正文
+#   · 正文里残留编辑器包裹的 `<html><head></head><body>` 标签，lxml 建树时会自然丢弃（实测 100/100 无残留）。
+#   · 正文纯文本长度：min 46 / 中位 693 / max 4375（最短那条是只有一句话的澄清公告），
+#     故 min_content_length 取 30，别按常规 100 设，否则会丢掉短公告。
+#
+# 附件（可正常下载，实测通过）
+# -----------------------------------------------------------------------------
+#   · 正文里以「附件下载：<a href="https://www.shzbpt.com/shjt/ananymous/file/download/{hex}?trt=…">变更通知书.pdf</a>」
+#     形式给出，实测 100 条中 13 条带附件；**匿名可下载**（无需 Referer/Cookie）：
+#     返回 200 / application/pdf / `Content-Disposition: attachment;filename=%E5%8F%98%E6%9B%B4%E9%80%9A%E7%9F%A5%E4%B9%A6.pdf` / 文件头 %PDF。
+#   · ⚠ 下载 URL **没有扩展名**（…/download/{hex}?trt=…），所以 `allowed_extensions` 必须留空数组
+#     （框架按 URL 后缀过滤），文件名由锚文本 + Content-Disposition 决定，扩展名再由文件头兜底。
+#   · `trt` 是签名串（形如 base64(JSON):时间戳:签名），按页面给出的链接**当轮立即**下载即可。
+#
+# 分类依据（100 条完整语料实测，含「所属栏目」人工基准）
+# -----------------------------------------------------------------------------
+#   · 汇总页里招标与中标混发：所属栏目分布 采购公告 63 / 采购结果公告 24 / 预审公告 5 /
+#     变更公告 4 / 中标候选人公示 3 / 竞价公告 1 → 按站方栏目口径 **招标 73 : 中标 27**。
+#   · 该站正文里有大量「未来时态」的结果词，**正文不能参与分类**（实测数据）：
+#       「成交」在招标类正文命中 54 条（正文表格里有「成交数量」列）、
+#       「合同」63 条（「合同签订之日起」）、「中标」16 条（「未中标企业…保证金退还」）、
+#       「结果」14 条、「定标/中选」8 条；
+#       最典型的一条：竞价采购公告正文写「电商平台将发布竞价交易**结果公告**，并通知竞卖成功企业」
+#       → 用「结果公告」做关键词就会把这条招标公告判成中标。
+#   · 因此本配置启用 `classification.title_only: true`（框架新增能力），只按标题判定；
+#     配合详情 h1 标题回填，实测 **准确率 1.000 / 召回 1.000（TP=27 FP=0 FN=0 TN=73）**：
+#       仅按标题 + 正文：准确率 0.964（那 1 条误判就是上面那句模板话术）；
+#       只按标题（本次方案）：1.000 / 1.000。
+#   · 刻意不用的词（正文命中即误判）：「中标」「成交」「结果」「合同」「定标」「中选」「候选人」。
+#
+# 本机网络说明（仅影响本机测试，与配置无关，配置里不放任何代理开关）
+# -----------------------------------------------------------------------------
+#   本机 HTTP_PROXY/HTTPS_PROXY=http://127.0.0.1:7890 时通时不通，框架 urllib 会尊重它。
+#   本机自测一律直连：`curl.exe --noproxy "*"`（本机吊销列表离线时再加 --ssl-no-revoke），
+#   跑框架先设进程变量 `$env:no_proxy='*'`；生产服务器无代理，不受影响。
+# =============================================================================
+
+- id: shzbpt_jiaoyi
+  enabled: true
+  name: 神火集团电子商务平台-公告信息（全平台招标+中标汇总）
+  entry_urls:
+    - https://www.shzbpt.com/jiaoyi/index.jhtml
+
+  schedule:
+    # 高产出平台（日均数百条），30 分钟一轮足够；增量靠 dedup
+    enabled: true
+    interval_seconds: 1800
+
+  limits:
+    max_concurrency: 4
+    request_interval_seconds: 0.3
+
+  request:
+    method: GET
+    headers:
+      Referer: https://www.shzbpt.com/jiaoyi/index.jhtml
+      Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8
+      Accept-Language: zh-CN,zh;q=0.9
+    params: {}
+    timeout_seconds: 30
+    retries: 2
+    retry_backoff_seconds: 0.8
+    verify_ssl: false
+
+  pagination:
+    # index_1.jhtml 与 index.jhtml 内容一致，{page} 从 1 起可直接用；
+    # ⚠ 上限 8797（越界页静默回落到末页），本配置只用前 3 页
+    mode: url_template
+    url_template: https://www.shzbpt.com/jiaoyi/index_{page}.jhtml
+    start_page: 1
+    end_page: 3
+
+  crypto:
+    enabled: false
+
+  cookie:
+    enabled: false
+
+  dedup:
+    redis_hash_key: zhaobiao:domian:linkqc
+    ttl_days: 30
+    prune_probability: 0.01
+
+  list_extraction:
+    response_html_selectors: []
+    item_selectors:
+      - kind: xpath
+        expr: //div[contains(@class, "List2")]//li[.//span[contains(., "发布时间")]]
+    link_selectors:
+      # 直接子节点 a：li 里另有「所属栏目」的 a（在 <p> 内），用 .//a 会抓错
+      - kind: xpath
+        expr: a/@href
+    title_selectors:
+      - kind: xpath
+        expr: a
+    date_selectors:
+      # 「发布时间：2026-09-18 11:10:49」→ 框架按 (\d{4})\D?(\d{1,2})\D?(\d{1,2}) 取日期段
+      - kind: xpath
+        expr: .//span[contains(., "发布时间")]
+    # 标题可能很短（实测「控制阀采购公告」只有 6 字），阈值取 5，避免误丢短标题公告
+    min_title_length: 5
+    fallback_auto: false
+
+  detail_extraction:
+    response_html_selectors: []
+    content_selectors:
+      - kind: xpath
+        expr: //div[@class="Content"]
+    # 列表标题会截断（尾部「...」），必须用详情 h1 回填；title_only 分类也依赖它
+    title_selectors:
+      - kind: xpath
+        expr: //h1
+    date_selectors:
+      - kind: xpath
+        expr: //div[contains(@class, "BorderTopDot")]
+    # 正文选择器命中时不兜底，避免改版后把「上一篇/下一篇/相关公告」当正文
+    fallback_auto: false
+    fallback_readability: false
+    # 实测最短正文 46 字（一句话的澄清公告），阈值取 30 保住短公告
+    min_content_length: 30
+
+  attachments:
+    enabled: true
+    selectors:
+      - kind: xpath
+        expr: //div[@class="Content"]//a[contains(@href, "file/download")]/@href
+    # 与 selectors 同域同序：锚文本就是真实文件名（如「变更通知书.pdf」）；
+    # 缺失时框架回退 Content-Disposition（该接口实测带百分号编码的中文名）
+    filename_selectors:
+      - kind: xpath
+        expr: //div[@class="Content"]//a[contains(@href, "file/download")]
+    # ⚠ 必须为空：下载 URL 形如 /shjt/ananymous/file/download/{hex}?trt=…（无扩展名），
+    # 一旦在这里限制 .pdf 之类，框架按 URL 后缀过滤会把全部附件丢掉
+    allowed_extensions: []
+    reject_login_pages: true
+    max_bytes: 52428800
+
+  classification:
+    # 正文（含明细表格列名「成交数量」等）与模板话术里满是"未来时态"结果词 → 只按标题判定。
+    # 标题经详情 h1 回填后，100 条语料实测准确率 1.000 / 召回 1.000。
+    default_type: zhaobiao
+    title_only: true
+    zhongbiao_keywords:
+      - 采购结果公告
+      - 结果公告
+      - 结果公示
+      - 评审结果
+      - 中标候选人
+      - 中标公告
+      - 中标结果
+      - 中标公示
+      - 成交公告
+      - 成交结果
+      - 成交公示
+      - 流拍
+      - 废标
+      - 终止公告
+
+  area_extraction:
+    # 平台无地区字段；公告来自神火集团各厂矿（河南永城/梁北/薛湖、新疆、云南、上海等），
+    # 由框架从标题优先、正文兜底提取，不设 fixed_value
+    enabled: true
+    use_title_first: true
+
+  output:
+    enabled: true
+    queue_zhaobiao: zhaobiao:result:zhaobiao
+    queue_zhongbiao: zhaobiao:result:zhongbiao
+    attachment_dir_zhaobiao: /root/pachong/zhaobiao/data/附件
+    attachment_dir_zhongbiao: /root/pachong/zhaobiao/data_zb/附件
